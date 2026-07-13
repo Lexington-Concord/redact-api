@@ -1,0 +1,36 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.db
+*.sqlite
+*.sqlite3
+*.log
+
+.venv/
+.env
+.env.*
+
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.json
+htmlcov/
+
+.build/
+.dist/
+build/
+dist/
+
+.DS_Store
+.devspace/*
+
+# Local file uploads
+uploads/
+
+# Sphinx documentation build
+docs/_build/
+
+# Templatization output
+.templatized/

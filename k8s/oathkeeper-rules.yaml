@@ -1,0 +1,103 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: oathkeeper-rules
+  # namespace managed by DevSpace
+data:
+  access-rules.yaml: |
+    # Public endpoints (no auth required)
+    - id: "public:health"
+      upstream:
+        url: "http://fastapi-template"
+      match:
+        url: "http://<**>/health"
+        methods:
+          - GET
+      authenticators:
+        - handler: noop
+      authorizer:
+        handler: allow
+      mutators:
+        - handler: noop
+
+    - id: "public:ping"
+      upstream:
+        url: "http://fastapi-template"
+      match:
+        url: "http://<**>/ping"
+        methods:
+          - GET
+      authenticators:
+        - handler: noop
+      authorizer:
+        handler: allow
+      mutators:
+        - handler: noop
+
+    - id: "public:docs"
+      upstream:
+        url: "http://fastapi-template"
+      match:
+        url: "http://<**>/docs<**>"
+        methods:
+          - GET
+      authenticators:
+        - handler: noop
+      authorizer:
+        handler: allow
+      mutators:
+        - handler: noop
+
+    - id: "public:openapi"
+      upstream:
+        url: "http://fastapi-template"
+      match:
+        url: "http://<**>/openapi.json"
+        methods:
+          - GET
+      authenticators:
+        - handler: noop
+      authorizer:
+        handler: allow
+      mutators:
+        - handler: noop
+
+    # Block external access to /_admin (internal-only endpoints)
+    # These endpoints are only accessible from within the cluster
+    # External requests are blocked with 403 Forbidden
+    - id: "admin:block-external"
+      match:
+        url: "http://<**>/_admin/<**>"
+        methods:
+          - GET
+          - POST
+          - PUT
+          - PATCH
+          - DELETE
+      authenticators:
+        - handler: noop
+      authorizer:
+        handler: deny
+      errors:
+        - handler: json
+
+    # Protected endpoints (require authentication + JWT with org validation)
+    - id: "authenticated:api"
+      upstream:
+        url: "http://fastapi-template"
+      match:
+        url: "http://<**>/<**>"
+        methods:
+          - GET
+          - POST
+          - PUT
+          - PATCH
+          - DELETE
+      authenticators:
+        - handler: cookie_session
+      authorizer:
+        handler: remote_json  # Validate org membership via backend
+      mutators:
+        - handler: jwt  # Generate JWT with org_id claim
+      errors:
+        - handler: json

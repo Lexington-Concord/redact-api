@@ -1,0 +1,31 @@
+# Git
+.git/
+
+# Template development/tracking files (not part of generated project)
+# These are for template maintainers, not end users
+REMEDIATION-STATUS.md
+.github/workflows/publish-template.yml
+scripts/templatize.sh
+
+# Build artifacts
+docs/_build/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Generated files (will be regenerated)
+uv.lock
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Environment
+.env
+.venv/
+venv/

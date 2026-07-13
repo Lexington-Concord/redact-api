@@ -1,0 +1,3 @@
+from typing import Any
+
+def upgrade(*args: Any, **kwargs: Any) -> None: ...

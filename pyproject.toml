@@ -1,0 +1,163 @@
+[project]
+name = "redact_api"
+version = "0.3.0"
+description = "A FastAPI microservice"
+requires-python = ">=3.13"
+dependencies = [
+  "fastapi>=0.115.0",
+  "fastapi-pagination>=0.12.31",
+  "uvicorn[standard]>=0.30.0",
+  "sqlmodel>=0.0.22",
+  "asyncpg>=0.29.0",
+  "alembic>=1.13.0",
+  "pydantic-settings>=2.4.0",
+  "pydantic[email]>=2.0.0",
+  "prometheus-client>=0.21.0",
+  "ecs-logging>=2.2.0",
+  "pyjwt[crypto]>=2.9.0",
+  "httpx>=0.27.0",
+  "python-multipart>=0.0.9",
+  "slowapi>=0.1.9",
+  "tenacity>=9.0.0",
+]
+
+[build-system]
+requires = ["hatchling>=1.24.2"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["redact_api"]
+
+[tool.ruff]
+line-length = 119
+src = ["redact_api"]
+show-fixes = true
+extend-exclude = ["stubs", "alembic/versions/*"]
+
+[tool.ruff.lint]
+# Extended rule set for production-grade code quality:
+# E/F - Pyflakes errors and warnings (syntax, undefined names)
+# I - isort (import sorting)
+# N - pep8-naming (naming conventions)
+# UP - pyupgrade (modern Python syntax)
+# B - flake8-bugbear (common bugs and design problems)
+# SIM - flake8-simplify (code simplification)
+# PL - Pylint (comprehensive static analysis)
+# RUF - Ruff-specific rules
+# ANN - flake8-annotations (type annotations required)
+# S - flake8-bandit (security best practices)
+# W - pycodestyle warnings
+# EM - flake8-errmsg (error message patterns)
+# TRY - tryceratops (exception handling best practices)
+# A - flake8-builtins (shadowing built-ins)
+# ARG - flake8-unused-arguments (unused function arguments)
+# C90 - mccabe (cyclomatic complexity)
+# PT - flake8-pytest-style (pytest patterns)
+# RSE - flake8-raise (raise statement patterns)
+# RET - flake8-return (return statement patterns)
+select = ["E", "F", "I", "N", "UP", "B", "SIM", "PL", "RUF", "ANN", "S", "W", "EM", "TRY", "A", "ARG", "C90", "PT", "RSE", "RET"]
+
+[tool.ruff.lint.flake8-annotations]
+# FastAPI uses operator overloading heavily (Depends, Query, Path, etc.)
+# Annotating __dunder__ methods adds noise without value
+suppress-dummy-args = true
+# ANN101/ANN102: Typing self/cls is redundant and clutters method signatures
+# Modern type checkers infer self/cls types automatically
+ignore-fully-untyped = true
+
+[tool.ruff.lint.flake8-pytest-style]
+# Use @pytest.mark.asyncio without parentheses (matches pytest-asyncio defaults)
+mark-parentheses = false
+# Use @pytest.fixture without parentheses when no arguments
+fixture-parentheses = false
+
+[tool.ruff.lint.mccabe]
+# Maximum cyclomatic complexity for functions
+# 10 is a reasonable threshold - functions above this should be refactored
+max-complexity = 10
+
+[tool.ruff.lint.per-file-ignores]
+# Security checks are valuable in production code but add noise in tests
+# where we intentionally create insecure test data (hardcoded passwords, etc.)
+# PT009 allows raw assert statements which are appropriate for pytest
+# PLR2004 allows magic numbers in test assertions (expected counts, etc.)
+"redact_api/tests/**" = ["S", "PT009", "PLR2004", "ARG002", "TRY002"]
+# PLC0415 allows late imports for optional dependencies (azure, aws, gcs)
+"redact_api/core/storage.py" = ["PLC0415"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+
+[tool.mypy]
+python_version = "3.13"
+warn_unused_ignores = true
+warn_redundant_casts = true
+warn_unused_configs = true
+mypy_path = "stubs"
+exclude = [
+    "alembic/versions/.*"
+]
+
+# Azure Blob Storage - no complete type stubs available
+[[tool.mypy.overrides]]
+module = ["azure.*"]
+ignore_missing_imports = true
+
+# Google Cloud - no complete type stubs available
+[[tool.mypy.overrides]]
+module = ["google.*"]
+ignore_missing_imports = true
+
+[tool.coverage.run]
+source = ["redact_api"]
+# Required for accurate coverage with FastAPI + async SQLAlchemy
+# SQLAlchemy async uses greenlets internally, and coverage.py loses track
+# of execution across greenlet boundaries without this setting.
+# See: https://github.com/nedbat/coveragepy/issues/1240
+concurrency = ["greenlet", "thread"]
+omit = [
+    "redact_api/tests/*",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "@abstractmethod",
+]
+
+[tool.pytest.ini_options]
+addopts = "--tb=short -n auto --cov=redact_api --cov-report=term-missing --cov-fail-under=90"
+asyncio_mode = "auto"
+testpaths = ["redact_api/tests"]
+
+[project.optional-dependencies]
+# Object storage provider dependencies (install as needed)
+# Local storage (default) requires no additional dependencies
+azure = ["azure-storage-blob>=12.20.0"]
+aws = ["aioboto3>=13.0.0"]
+gcs = ["google-cloud-storage>=2.14.0"]
+# Install all cloud providers: pip install .[azure,aws,gcs]
+
+[dependency-groups]
+dev = [
+  "filelock>=3.12.0",
+  "furo>=2024.1.29",
+  "httpx>=0.27.0",
+  "mypy>=1.10.0",
+  "pre-commit>=3.7.0",
+  "psycopg[binary]>=3.1.0",
+  "pytest>=8.0.0",
+  "pytest-asyncio>=0.23.0",
+  "pytest-alembic>=0.11.1",
+  "pytest-cov>=7.0.0",
+  "pytest-docker>=3.1.1",
+  "pytest-xdist>=3.5.0",
+  "ruff>=0.5.0",
+  "sphinx>=7.3.0",
+  "myst-parser>=3.0.0",
+  "types-aioboto3>=13.0.0",
+  "types-aiobotocore[s3]",
+]

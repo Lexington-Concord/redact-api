@@ -1,0 +1,145 @@
+# FastAPI Template Configuration
+# Copy to .env and update values for your environment
+
+# =============================================================================
+# Application Settings
+# =============================================================================
+APP_NAME=redact_api
+ENVIRONMENT=local
+LOG_LEVEL=debug
+
+# =============================================================================
+# Database
+# =============================================================================
+DATABASE_URL=postgresql+asyncpg://app:app@localhost:5432/app
+SQLALCHEMY_ECHO=false
+
+# =============================================================================
+# API Behavior
+# =============================================================================
+PAGINATION_PAGE_SIZE=50
+PAGINATION_PAGE_SIZE_MAX=200
+
+# =============================================================================
+# Observability
+# =============================================================================
+ENABLE_METRICS=true
+ACTIVITY_LOGGING_ENABLED=true
+ACTIVITY_LOG_RETENTION_DAYS=90
+
+# =============================================================================
+# File Uploads
+# =============================================================================
+MAX_FILE_SIZE_BYTES=52428800  # 50MB in bytes
+
+# =============================================================================
+# Object Storage Configuration
+# Choose one provider and configure its settings below
+# Options: local, azure, s3, gcs
+# =============================================================================
+STORAGE_PROVIDER=local
+
+# --- Local Storage ---
+# Use for development or single-server deployments
+STORAGE_LOCAL_PATH=./uploads
+
+# --- Azure Blob Storage ---
+# Requires: pip install .[azure]
+# Get connection string from Azure Portal -> Storage Account -> Access Keys
+# STORAGE_PROVIDER=azure
+# STORAGE_AZURE_CONTAINER=documents
+# STORAGE_AZURE_CONNECTION_STRING=DefaultEndpointsProtocol=https;AccountName=myaccount;AccountKey=mykey;EndpointSuffix=core.windows.net
+
+# --- AWS S3 ---
+# Requires: pip install .[aws]
+# AWS credentials from ~/.aws/credentials or IAM role (EC2, ECS, Lambda)
+# Or set: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY environment variables
+# STORAGE_PROVIDER=s3
+# STORAGE_AWS_BUCKET=my-document-bucket
+# STORAGE_AWS_REGION=us-east-1
+
+# --- Google Cloud Storage ---
+# Requires: pip install .[gcs]
+# Get service account key from GCP Console -> IAM -> Service Accounts
+# STORAGE_PROVIDER=gcs
+# STORAGE_GCS_BUCKET=my-document-bucket
+# STORAGE_GCS_PROJECT_ID=my-project-id
+# GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account-key.json
+
+# =============================================================================
+# Tenant Isolation (Multi-tenant Security)
+# =============================================================================
+# WARNING: Disabling this in multi-tenant environments creates severe data leak vulnerabilities
+# Only disable for single-tenant deployments or public APIs
+ENFORCE_TENANT_ISOLATION=true
+
+# =============================================================================
+# Authentication (JWT)
+# Choose one provider and configure its settings below
+# Options: none, ory, auth0, keycloak, cognito
+# =============================================================================
+AUTH_PROVIDER_TYPE=none
+
+# --- Common Auth Settings (required when AUTH_PROVIDER_TYPE != none) ---
+# AUTH_PROVIDER_URL=https://your-auth-provider.com
+# AUTH_PROVIDER_ISSUER=https://your-auth-provider.com/
+# JWT_ALGORITHM=RS256
+# JWT_PUBLIC_KEY=-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA...\n-----END PUBLIC KEY-----
+
+# --- Ory Hydra Configuration ---
+# AUTH_PROVIDER_TYPE=ory
+# AUTH_PROVIDER_URL=https://your-ory-instance.com
+# AUTH_PROVIDER_ISSUER=https://your-ory-instance.com/
+# JWT_ALGORITHM=RS256
+# JWT_PUBLIC_KEY=<fetch from /.well-known/jwks.json>
+
+# --- Auth0 Configuration ---
+# AUTH_PROVIDER_TYPE=auth0
+# AUTH_PROVIDER_URL=https://your-tenant.auth0.com
+# AUTH_PROVIDER_ISSUER=https://your-tenant.auth0.com/
+# JWT_ALGORITHM=RS256
+# JWT_PUBLIC_KEY=<fetch from /.well-known/jwks.json>
+
+# --- Keycloak Configuration ---
+# AUTH_PROVIDER_TYPE=keycloak
+# AUTH_PROVIDER_URL=https://keycloak.example.com/realms/your-realm
+# AUTH_PROVIDER_ISSUER=https://keycloak.example.com/realms/your-realm
+# JWT_ALGORITHM=RS256
+# JWT_PUBLIC_KEY=<fetch from /protocol/openid-connect/certs>
+
+# --- AWS Cognito Configuration ---
+# AUTH_PROVIDER_TYPE=cognito
+# AUTH_PROVIDER_URL=https://cognito-idp.us-east-1.amazonaws.com/us-east-1_XXXXX
+# AUTH_PROVIDER_ISSUER=https://cognito-idp.us-east-1.amazonaws.com/us-east-1_XXXXX
+# JWT_ALGORITHM=RS256
+# JWT_PUBLIC_KEY=<fetch from /.well-known/jwks.json>
+
+# =============================================================================
+# CORS Configuration
+# =============================================================================
+# Comma-separated list of allowed origins for Cross-Origin Resource Sharing
+# CRITICAL: In production, only list your actual frontend domains
+# NEVER use "*" in production (security risk - allows any site to make requests)
+CORS_ALLOWED_ORIGINS=http://localhost:3000,http://localhost:8080
+
+# =============================================================================
+# Rate Limiting (Optional)
+# =============================================================================
+# Requires: pip install slowapi
+# Protects API from abuse by limiting requests per IP address
+# RATE_LIMIT_ENABLED=false
+# RATE_LIMIT_PER_MINUTE=100
+
+# =============================================================================
+# Cross-service Communication (Optional)
+# =============================================================================
+# Configure when integrating with other services
+# AUTH_SERVICE_URL=https://auth-service:8000
+# NOTIFICATION_SERVICE_URL=https://notification-service:8000
+# ANALYTICS_SERVICE_URL=https://analytics-service:8000
+
+# =============================================================================
+# Environment-specific Overrides
+# =============================================================================
+# For production, set these via secrets manager or environment
+# Never commit actual secrets to version control

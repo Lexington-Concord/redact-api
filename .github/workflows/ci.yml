@@ -1,0 +1,75 @@
+# ci.yml - CI workflow for running pre-commit checks and tests
+#
+# This workflow runs on all PRs to main and ensures code quality
+# through pre-commit hooks and the full test suite.
+#
+# Tests use pytest-docker which automatically starts Postgres via
+# tests/docker-compose.yml - no k3d/DevSpace needed in CI.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  pre-commit:
+    name: Pre-commit checks
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Set up Python
+        run: uv python install
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Cache mypy
+        uses: actions/cache@v4
+        with:
+          path: .mypy_cache
+          key: mypy-${{ runner.os }}-${{ hashFiles('pyproject.toml', 'uv.lock') }}
+          restore-keys: |
+            mypy-${{ runner.os }}-
+
+      - name: Run pre-commit
+        uses: pre-commit/action@v3.0.1
+
+  tests:
+    name: Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Set up Python
+        run: uv python install
+
+      - name: Cache uv dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/uv
+          key: uv-${{ runner.os }}-${{ hashFiles('uv.lock') }}
+          restore-keys: |
+            uv-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Run tests
+        run: |
+          uv run pytest redact_api/tests/ \
+            -v --tb=short -n auto \
+            --cov=redact_api --cov-report=term-missing --cov-fail-under=90

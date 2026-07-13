@@ -1,0 +1,89 @@
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: oathkeeper-config
+  # namespace managed by DevSpace
+data:
+  config.yaml: |
+    serve:
+      proxy:
+        port: 4455
+      api:
+        port: 4456
+
+    access_rules:
+      matching_strategy: glob
+      repositories:
+        - file:///etc/config/access-rules.yaml
+
+    authenticators:
+      cookie_session:
+        enabled: true
+        config:
+          check_session_url: http://kratos-public/sessions/whoami
+          preserve_path: true
+          extra_from: "@this"
+          subject_from: "identity.id"
+          only:
+            - ory_kratos_session
+
+      noop:
+        enabled: true
+
+    authorizers:
+      allow:
+        enabled: true
+
+      deny:
+        enabled: true
+
+      remote_json:
+        enabled: true
+        config:
+          remote: http://fastapi-template/_admin/internal/check-org-membership
+          headers:
+            X-User-ID: "{{ print .Subject }}"
+            X-Selected-Org: "{{ print .MatchContext.Header.Get \"X-Selected-Org\" }}"
+          retry:
+            max_delay: 100ms
+            give_up_after: 500ms
+
+    mutators:
+      jwt:
+        enabled: true
+        config:
+          signing_algorithm: RS256
+          jwks_url: file:///etc/secrets/jwks.json
+          ttl: 300s  # 5 minute JWT expiry (request-scoped)
+          claims: |
+            {
+              "iss": "oathkeeper",
+              "sub": "{{ print .Subject }}",
+              "email": "{{ print .Extra.identity.traits.email }}",
+              "org_id": "{{ print .MatchContext.Header.Get \"X-Selected-Org\" }}",
+              "name": "{{ print .Extra.identity.traits.name.first }} {{ print .Extra.identity.traits.name.last }}",
+              "iat": {{ now.Unix }},
+              "exp": {{ (now.Add (parseDuration "5m")).Unix }}
+            }
+
+      header:
+        enabled: true
+        config:
+          headers:
+            X-User-ID: "{{ print .Subject }}"
+            X-Email: "{{ print .Extra.identity.traits.email }}"
+            X-Name-First: "{{ print .Extra.identity.traits.name.first }}"
+            X-Name-Last: "{{ print .Extra.identity.traits.name.last }}"
+
+      noop:
+        enabled: true
+
+    errors:
+      fallback:
+        - json
+      handlers:
+        json:
+          enabled: true
+          config:
+            verbose: true

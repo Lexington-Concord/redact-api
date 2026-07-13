@@ -1,0 +1,112 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kratos-config
+  # namespace managed by DevSpace
+data:
+  kratos.yaml: |
+    version: v1.1.0
+    dsn: env://DSN
+
+    serve:
+      public:
+        base_url: https://kratos.mwarren.dev
+        cors:
+          enabled: true
+          allowed_origins:
+            - https://app.mwarren.dev
+          allowed_methods:
+            - GET
+            - POST
+            - PUT
+            - PATCH
+            - DELETE
+          allowed_headers:
+            - Authorization
+            - Content-Type
+            - Cookie
+          exposed_headers:
+            - Content-Type
+            - Set-Cookie
+          allow_credentials: true
+      admin:
+        base_url: http://kratos-admin:4434
+
+    selfservice:
+      default_browser_return_url: https://app.mwarren.dev/
+      allowed_return_urls:
+        - https://app.mwarren.dev
+
+      methods:
+        password:
+          enabled: true
+
+      flows:
+        error:
+          ui_url: https://app.mwarren.dev/error
+        settings:
+          ui_url: https://app.mwarren.dev/settings
+          privileged_session_max_age: 15m
+        recovery:
+          enabled: true
+          ui_url: https://app.mwarren.dev/recovery
+        verification:
+          enabled: true
+          ui_url: https://app.mwarren.dev/verification
+        logout:
+          after:
+            default_browser_return_url: https://app.mwarren.dev/login
+        login:
+          ui_url: https://app.mwarren.dev/login
+          lifespan: 10m
+        registration:
+          lifespan: 10m
+          ui_url: https://app.mwarren.dev/register
+          after:
+            password:
+              hooks:
+                - hook: session
+                - hook: web_hook
+                  config:
+                    url: http://fastapi-template:8000/_admin/webhooks/kratos/registration
+                    method: POST
+                    body: base64://ewogICJpZGVudGl0eSI6IHt7IC50b0pTT04gfX0KfQ==
+                    response:
+                      ignore: false
+
+    log:
+      level: info
+      format: json
+
+    secrets:
+      cookie:
+        - env://SECRETS_COOKIE
+      cipher:
+        - env://SECRETS_CIPHER
+
+    ciphers:
+      algorithm: xchacha20-poly1305
+
+    hashers:
+      algorithm: bcrypt
+      bcrypt:
+        cost: 12
+
+    identity:
+      default_schema_id: default
+      schemas:
+        - id: default
+          url: file:///etc/config/identity.schema.json
+
+    session:
+      lifespan: 24h
+      cookie:
+        domain: .mwarren.dev
+        path: /
+        same_site: Lax
+
+    courier:
+      smtp:
+        connection_uri: smtp://mailhog:1025  # Development only - no auth
+        from_address: noreply@mwarren.dev
+        from_name: Warren Enterprises

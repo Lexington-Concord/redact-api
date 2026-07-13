@@ -1,0 +1,256 @@
+version: v2beta1
+name: "fastapi-template"
+
+vars:
+  CLUSTER_NAME:
+    default: "fastapi-template"
+    source: env
+  NAMESPACE:
+    default: warren-enterprises-ltd
+    source: env
+  IMAGE_NAME:
+    default: "fastapi-template"
+    source: env
+  IMAGE_TAG:
+    default: dev
+    source: env
+  APP_NAME:
+    default: "fastapi-template"
+    source: env
+  ENVIRONMENT:
+    default: dev
+    source: env
+  LOG_LEVEL:
+    default: info
+    source: env
+  POSTGRES_RELEASE_NAME:
+    default: fastapi-postgres
+    source: env
+  POSTGRES_DB:
+    default: app
+    source: env
+  POSTGRES_USER:
+    default: app
+    source: env
+  POSTGRES_PASSWORD:
+    default: app
+    source: env
+
+localRegistry:
+  enabled: false
+
+images:
+  app:
+    image: ${IMAGE_NAME}
+    tags:
+      - ${IMAGE_TAG}
+    dockerfile: ./Dockerfile
+    skipPush: true
+    injectRestartHelper: false
+
+pipelines:
+  deploy:
+    run: |-
+      if is_dependency; then
+        bash scripts/devspace-banner.sh DEPENDENCY meta-workspace "Deploying: backend"
+        create_deployments backend
+      else
+        # Standalone: requires 'devspace run init' first to create cluster
+        bash scripts/devspace-banner.sh STANDALONE fastapi-template "Deploying: backend + postgres"
+        build_images --all
+        create_deployments --all
+      fi
+  dev:
+    run: |-
+      if is_dependency; then
+        bash scripts/devspace-banner.sh DEPENDENCY meta-workspace "Dev service: api"
+        start_dev api
+      else
+        # Standalone: requires 'devspace run init' first to create cluster
+        bash scripts/devspace-banner.sh STANDALONE fastapi-template "Dev services: all"
+        build_images --all
+        create_deployments --all
+        start_dev --all
+      fi
+  integration-tests:
+    run: |-
+      if is_dependency; then
+        bash scripts/devspace-banner.sh DEPENDENCY meta-workspace "Running: integration tests"
+        kubectl wait --for=condition=ready pod \
+          -l app.kubernetes.io/name=devspace-app \
+          -n "${NAMESPACE}" --timeout=120s
+        devspace enter --container api --namespace "${NAMESPACE}" \
+          --label-selector "app.kubernetes.io/name=devspace-app" \
+          -- sh -lc 'uv run pytest redact_api/tests/integration/ -v --tb=short'
+      else
+        # Standalone: requires 'devspace run init' first to create cluster
+        bash scripts/devspace-banner.sh STANDALONE fastapi-template "Running: integration tests"
+        build_images --all
+        create_deployments --all
+        kubectl wait --for=condition=ready pod -l app=postgres \
+          -n "${NAMESPACE}" --timeout=120s
+        kubectl wait --for=condition=ready pod \
+          -l app.kubernetes.io/name=devspace-app \
+          -n "${NAMESPACE}" --timeout=120s
+        devspace enter --container api --namespace "${NAMESPACE}" \
+          --label-selector "app.kubernetes.io/name=devspace-app" \
+          -- sh -lc 'uv run pytest redact_api/tests/integration/ -v --tb=short'
+      fi
+
+dev:
+  api:
+    namespace: ${NAMESPACE}
+    imageSelector: ${runtime.images.app.image}:${runtime.images.app.tag}
+    ports:
+      - port: "8000"
+    sync:
+      - path: ./:/app
+        excludeFile: .gitignore
+
+hooks:
+  - events: ["after:build"]
+    command: |-
+      if k3d cluster list | grep -q "^${CLUSTER_NAME} "; then
+        k3d image import ${runtime.images.app.image}:${runtime.images.app.tag} -c ${CLUSTER_NAME}
+      else
+        echo "Skipping image import - cluster ${CLUSTER_NAME} not found (running as dependency)"
+      fi
+
+commands:
+  cluster-up:
+    description: "Create standalone cluster (run before deploy/dev)"
+    command: bash
+    args:
+      - -c
+      - |
+        # Clear cache so DevSpace picks up new context
+        rm -f .devspace/cache.yaml
+        # Create cluster
+        bash scripts/k3d-up.sh
+        export KUBECONFIG="$(k3d kubeconfig write ${CLUSTER_NAME})"
+        kubectl config use-context "k3d-${CLUSTER_NAME}"
+        # Wait for cluster to be ready
+        for _ in $(seq 1 30); do
+          if kubectl get namespaces >/dev/null 2>&1; then
+            break
+          fi
+          sleep 1
+        done
+        kubectl create namespace "${NAMESPACE}" 2>/dev/null || true
+        bash scripts/ensure-db-secret.sh
+        echo ""
+        echo "Cluster ${CLUSTER_NAME} ready."
+        echo "Next: run 'devspace deploy' or 'devspace dev'"
+  alembic-revision:
+    description: "Generate an Alembic migration (requires --message)"
+    command: bash
+    args:
+      - -c
+      - |
+        if [ -z "$1" ]; then
+          echo "Usage: devspace run alembic:revision -- \"your message\"" >&2
+          exit 1
+        fi
+        devspace enter \
+          --container api \
+          --namespace "${NAMESPACE}" \
+          --label-selector "app.kubernetes.io/name=devspace-app" \
+          -- sh -lc 'uv run alembic revision --autogenerate -m "$1"' _ "$1"
+      - --
+  alembic-upgrade:
+    description: "Run Alembic migrations against the dev cluster"
+    command: bash
+    args:
+      - -c
+      - |
+        devspace enter \
+          --container api \
+          --namespace "${NAMESPACE}" \
+          --label-selector "app.kubernetes.io/name=devspace-app" \
+          -- sh -lc 'uv run alembic upgrade head'
+  k3d-down:
+    description: "Delete the local k3d cluster and clear cache"
+    command: bash
+    args:
+      - -c
+      - |
+        bash scripts/k3d-down.sh
+        rm -f .devspace/cache.yaml
+        echo "Cache cleared"
+
+
+# Deployment definitions
+
+deployments:
+  postgres:
+    namespace: ${NAMESPACE}
+    kubectl:
+      manifests:
+        - k8s/postgres-init-configmap.yaml
+        - k8s/postgres-service.yaml
+        - k8s/postgres-statefulset.yaml
+
+  backend:
+    namespace: ${NAMESPACE}
+    helm:
+      chart:
+        name: component-chart
+        repo: https://charts.devspace.sh
+      values:
+        containers:
+          - name: api
+            image: ${runtime.images.app.image}:${runtime.images.app.tag}
+            imagePullPolicy: IfNotPresent
+            ports:
+              - containerPort: 8000
+            env:
+              - name: POSTGRES_USER
+                valueFrom:
+                  secretKeyRef:
+                    name: postgres-secret
+                    key: POSTGRES_USER
+              - name: POSTGRES_PASSWORD
+                valueFrom:
+                  secretKeyRef:
+                    name: postgres-secret
+                    key: POSTGRES_PASSWORD
+              - name: POSTGRES_DB
+                valueFrom:
+                  secretKeyRef:
+                    name: postgres-secret
+                    key: POSTGRES_DB
+              - name: APP_NAME
+                value: ${APP_NAME}
+              - name: ENVIRONMENT
+                value: ${ENVIRONMENT}
+              - name: LOG_LEVEL
+                value: ${LOG_LEVEL}
+              - name: SQLALCHEMY_ECHO
+                value: "false"
+              - name: ENABLE_METRICS
+                value: "true"
+              - name: DATABASE_URL
+                value: postgresql+asyncpg://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@postgres.${NAMESPACE}.svc.cluster.local:5432/$(POSTGRES_DB)
+            readinessProbe:
+              httpGet:
+                path: /health
+                port: 8000
+              initialDelaySeconds: 5
+              periodSeconds: 10
+            livenessProbe:
+              httpGet:
+                path: /health
+                port: 8000
+              initialDelaySeconds: 10
+              periodSeconds: 20
+            resources:
+              requests:
+                cpu: "100m"
+                memory: "128Mi"
+              limits:
+                cpu: "500m"
+                memory: "512Mi"
+        service:
+          ports:
+            - port: 80
+              targetPort: 8000

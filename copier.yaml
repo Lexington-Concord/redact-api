@@ -1,0 +1,120 @@
+_min_copier_version: "9.0.0"
+_templates_suffix: ""
+_envops:
+  keep_trailing_newline: true
+_exclude:
+  - "scripts/manage-test-instance.sh"
+  - "scripts/templatize.sh"
+  - ".git"
+  - ".git/**"
+  - ".templatized"
+  - ".templatized/**"
+  - "REMEDIATION-STATUS.md"
+  - "REVERSE-SYNC-QUICK-START.md"
+
+project_name:
+  type: str
+  help: "Project name (e.g., 'User Auth Service')"
+  validator: ""
+
+project_slug:
+  type: str
+  help: "Python package name (auto-generated, lowercase with underscores)"
+  default: "redact_api"
+
+description:
+  type: str
+  help: "Brief project description"
+  default: "A FastAPI microservice"
+
+port:
+  type: int
+  help: "Development server port"
+  default: 8000
+  validator: ""
+
+auth_enabled:
+  type: bool
+  help: "Enable authentication middleware? (Requires auth provider configuration)"
+  default: false
+
+auth_provider:
+  type: str
+  help: |
+    Authentication provider:
+      - none: No authentication (public API)
+      - ory: Ory (open source, self-hosted)
+      - auth0: Auth0 (commercial SaaS)
+      - keycloak: Keycloak (open source)
+      - cognito: AWS Cognito (AWS managed)
+  default: none
+  choices:
+    - none
+    - ory
+    - auth0
+    - keycloak
+    - cognito
+  when: "False"
+
+multi_tenant:
+  type: bool
+  help: "Enable multi-tenant isolation? (Requires authentication)"
+  default: true
+
+storage_provider:
+  type: str
+  help: |
+    Storage provider for file uploads:
+      - local: Local filesystem (development)
+      - s3: AWS S3 (production)
+      - azure: Azure Blob Storage (production)
+      - gcs: Google Cloud Storage (production)
+  default: local
+  choices:
+    - local
+    - s3
+    - azure
+    - gcs
+
+cors_origins:
+  type: str
+  help: "CORS allowed origins (comma-separated, e.g., 'http://localhost:3000')"
+  default: "http://localhost:3000"
+
+enable_metrics:
+  type: bool
+  help: "Enable Prometheus metrics endpoint at /metrics?"
+  default: true
+
+enable_activity_logging:
+  type: bool
+  help: "Enable activity logging for audit trails?"
+  default: true
+
+_tasks:
+  - "python3 _tasks.py"
+
+_message_after: |
+
+  🎉 Project redact-api generated successfully!
+
+  Quick Start:
+    1. Edit .env - Set DATABASE_URL to your PostgreSQL connection
+    2. Start development server:
+       cd .
+       uv run fastapi dev redact_api/main.py
+    3. View API docs: http://localhost:8002/docs
+
+  Configuration Summary:
+    • Authentication: Disabled
+    • Multi-tenant: Enabled
+    • Storage: local
+    • Metrics: Enabled at /metrics
+    • Activity Logging: Enabled
+
+  Next Steps:
+    • Review QUICKSTART.md for detailed setup instructions
+    • See CONFIGURATION-GUIDE.md for advanced configuration
+    • Check docs/TENANT_ISOLATION.md if using multi-tenant mode
+
+  Happy coding! 🚀
