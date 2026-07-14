@@ -24,7 +24,14 @@ class WordBBox(BaseModel):
 
 
 class PageModel(BaseModel):
-    """Canonical per-page extraction result: raster reference + word-level text layer."""
+    """Canonical per-page extraction result: raster reference + word-level text layer.
+
+    `width`/`height`/`words[].bbox` are in PDF-point units, resolution-independent
+    of the raster. The PNG stored at `raster_key` is rendered at `RASTER_DPI` (150)
+    DPI, i.e. its pixel dimensions are `round(width * RASTER_DPI / 72)` by
+    `round(height * RASTER_DPI / 72)` -- consumers must not assume raster pixels
+    and point-based bboxes share a scale.
+    """
 
     page_number: int
     width: float
