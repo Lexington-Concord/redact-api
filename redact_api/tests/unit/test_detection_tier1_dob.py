@@ -8,10 +8,12 @@ meeting/filing dates -- must NOT match.
 
 from __future__ import annotations
 
-from redact_api.detection.consts import CATEGORY_DOB, CONFIDENCE_REGEX_ONLY
+from redact_api.detection.consts import CATEGORY_DOB, CONFIDENCE_REGEX_ONLY, DOB_ANCHOR_WINDOW_CHARS
 from redact_api.detection.tier1 import detect_dob
-from redact_api.models.span import SourceTier
-from redact_api.tests.fixtures.detection_pages import make_page
+from redact_api.tests.fixtures.detection_pages import assert_candidate, make_page
+
+# Length of the anchor keyword used in the boundary vectors below ("DOB").
+_ANCHOR_LEN = 3
 
 # (page text, expected matched date text)
 _TRUE_POSITIVES = [
@@ -38,11 +40,19 @@ class TestDetectDobTruePositives:
     def test_span_metadata(self) -> None:
         page = make_page("DOB: 01/02/1990")
         (span,) = detect_dob(page)
-        assert span.category == CATEGORY_DOB
-        assert span.source_tier == SourceTier.TIER_1
-        assert span.confidence == CONFIDENCE_REGEX_ONLY
-        assert page.text[span.start : span.end] == "01/02/1990"
-        assert span.bboxes
+        assert_candidate(
+            span, page, category=CATEGORY_DOB, confidence=CONFIDENCE_REGEX_ONLY, expected_text="01/02/1990"
+        )
+
+    def test_anchor_exactly_at_window_boundary_is_detected(self) -> None:
+        # "DOB" immediately followed by filler such that "DOB"+filler is
+        # exactly DOB_ANCHOR_WINDOW_CHARS long: the anchor's leading char sits
+        # right at the window's left edge and must still be found (R8's window
+        # is inclusive of all 32 preceding chars, not 31).
+        filler = "x" * (DOB_ANCHOR_WINDOW_CHARS - _ANCHOR_LEN)
+        page = make_page(f"DOB{filler}01/02/1990")
+        (span,) = detect_dob(page)
+        assert span.text == "01/02/1990"
 
 
 class TestDetectDobNearMisses:
@@ -55,4 +65,12 @@ class TestDetectDobNearMisses:
         # 'DOB' followed by >32 chars of filler before the date must not anchor it.
         filler = "x" * 40
         page = make_page(f"DOB {filler} 01/02/1990")
+        assert detect_dob(page) == []
+
+    def test_anchor_one_char_past_window_boundary_is_not_detected(self) -> None:
+        # One character more than the exact-boundary vector above: "DOB"+filler
+        # is DOB_ANCHOR_WINDOW_CHARS + 1 long, so the window's left edge cuts
+        # off the anchor's leading "D" -- must not match.
+        filler = "x" * (DOB_ANCHOR_WINDOW_CHARS - _ANCHOR_LEN + 1)
+        page = make_page(f"DOB{filler}01/02/1990")
         assert detect_dob(page) == []

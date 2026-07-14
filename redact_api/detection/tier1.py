@@ -21,6 +21,7 @@ with ``email_validator`` (already an installed dependency) (R9).
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 
 from email_validator import EmailNotValidError, validate_email
 
@@ -54,8 +55,13 @@ _PHONE_RE = re.compile(
 )
 
 # Coarse email candidate; every hit is confirmed with email_validator before it
-# becomes a span.
-_EMAIL_RE = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
+# becomes a span. Domain labels are matched as a separate `label.` repeated
+# group (rather than one `[A-Za-z0-9.-]+` class containing the dot itself)
+# so the engine never has to backtrack character-by-character hunting for
+# where the trailing literal "." can go -- that ambiguity is what turns a
+# long non-matching alnum/dot run (e.g. OCR noise) into O(n^2) backtracking
+# on this per-page hot-path regex.
+_EMAIL_RE = re.compile(r"[A-Za-z0-9._%+\-]+@(?:[A-Za-z0-9\-]+\.)+[A-Za-z]{2,}")
 
 # Unbroken 12-19 digit run; Luhn-checked before it becomes a span.
 _ACCOUNT_RE = re.compile(r"(?<!\d)\d{12,19}(?!\d)")
@@ -136,52 +142,77 @@ def _candidate(page: PageModel, match: re.Match[str], category: str, confidence:
     )
 
 
+def _detect_matches(
+    page: PageModel,
+    pattern: re.Pattern[str],
+    category: str,
+    confidence: float,
+    validate: Callable[[re.Match[str]], bool] | None = None,
+) -> list[CandidateSpan]:
+    """Scan ``page.text`` with ``pattern``, keeping matches ``validate`` accepts.
+
+    Shared iterate/filter/append shape only -- each category's actual
+    validator (SSA range rules, Luhn, ``email_validator``, plate shape, DOB
+    anchor) stays a separate, category-specific callable passed in by the
+    caller, so categories still share no validator logic (R1).
+    """
+    spans: list[CandidateSpan] = []
+    for match in pattern.finditer(page.text):
+        if validate is None or validate(match):
+            spans.append(_candidate(page, match, category, confidence))
+    return spans
+
+
 def detect_ssn(page: PageModel) -> list[CandidateSpan]:
     """Detect dashed SSNs that satisfy the SSA area/group/serial rules."""
-    spans: list[CandidateSpan] = []
-    for match in _SSN_RE.finditer(page.text):
+
+    def _validate(match: re.Match[str]) -> bool:
         area, group, serial = (int(part) for part in match.group().split("-"))
-        if _is_valid_ssn(area, group, serial):
-            spans.append(_candidate(page, match, CATEGORY_SSN, CONFIDENCE_VALIDATED))
-    return spans
+        return _is_valid_ssn(area, group, serial)
+
+    return _detect_matches(page, _SSN_RE, CATEGORY_SSN, CONFIDENCE_VALIDATED, validate=_validate)
 
 
 def detect_phone(page: PageModel) -> list[CandidateSpan]:
     """Detect NANP phone numbers in common written formats."""
-    return [_candidate(page, match, CATEGORY_PHONE, CONFIDENCE_REGEX_ONLY) for match in _PHONE_RE.finditer(page.text)]
+    return _detect_matches(page, _PHONE_RE, CATEGORY_PHONE, CONFIDENCE_REGEX_ONLY)
 
 
 def detect_email(page: PageModel) -> list[CandidateSpan]:
     """Detect email addresses, confirming each candidate with email_validator."""
-    spans: list[CandidateSpan] = []
-    for match in _EMAIL_RE.finditer(page.text):
-        if _is_valid_email(match.group()):
-            spans.append(_candidate(page, match, CATEGORY_EMAIL, CONFIDENCE_REGEX_ONLY))
-    return spans
+    return _detect_matches(
+        page, _EMAIL_RE, CATEGORY_EMAIL, CONFIDENCE_REGEX_ONLY, validate=lambda match: _is_valid_email(match.group())
+    )
 
 
 def detect_account_number(page: PageModel) -> list[CandidateSpan]:
     """Detect 12-19 digit account numbers that pass the Luhn checksum."""
-    spans: list[CandidateSpan] = []
-    for match in _ACCOUNT_RE.finditer(page.text):
-        if _luhn_check(match.group()):
-            spans.append(_candidate(page, match, CATEGORY_ACCOUNT_NUMBER, CONFIDENCE_VALIDATED))
-    return spans
+    return _detect_matches(
+        page,
+        _ACCOUNT_RE,
+        CATEGORY_ACCOUNT_NUMBER,
+        CONFIDENCE_VALIDATED,
+        validate=lambda match: _luhn_check(match.group()),
+    )
 
 
 def detect_license_plate(page: PageModel) -> list[CandidateSpan]:
     """Detect conservative generic (mixed letter+digit) license-plate shapes."""
-    spans: list[CandidateSpan] = []
-    for match in _LICENSE_PLATE_RE.finditer(page.text):
-        if _is_plate_shaped(match.group()):
-            spans.append(_candidate(page, match, CATEGORY_LICENSE_PLATE, CONFIDENCE_REGEX_ONLY))
-    return spans
+    return _detect_matches(
+        page,
+        _LICENSE_PLATE_RE,
+        CATEGORY_LICENSE_PLATE,
+        CONFIDENCE_REGEX_ONLY,
+        validate=lambda match: _is_plate_shaped(match.group()),
+    )
 
 
 def detect_dob(page: PageModel) -> list[CandidateSpan]:
     """Detect dates of birth: numeric dates preceded by a DOB keyword anchor (R8)."""
-    spans: list[CandidateSpan] = []
-    for match in _DATE_RE.finditer(page.text):
-        if _has_dob_anchor(page.text, match.start()):
-            spans.append(_candidate(page, match, CATEGORY_DOB, CONFIDENCE_REGEX_ONLY))
-    return spans
+    return _detect_matches(
+        page,
+        _DATE_RE,
+        CATEGORY_DOB,
+        CONFIDENCE_REGEX_ONLY,
+        validate=lambda match: _has_dob_anchor(page.text, match.start()),
+    )

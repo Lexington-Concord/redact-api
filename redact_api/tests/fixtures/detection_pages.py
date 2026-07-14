@@ -11,7 +11,9 @@ from __future__ import annotations
 
 import re
 
+from redact_api.detection.models import CandidateSpan
 from redact_api.ingest.models import PageModel, WordBBox
+from redact_api.models.span import SourceTier
 
 _TOKEN_RE = re.compile(r"\S+")
 _PAGE_WIDTH = 612.0
@@ -44,3 +46,25 @@ def make_page(text: str, page_number: int = 1) -> PageModel:
         rotation=0,
         raster_key="",
     )
+
+
+def assert_candidate(
+    span: CandidateSpan,
+    page: PageModel,
+    *,
+    category: str,
+    confidence: float,
+    expected_text: str,
+) -> None:
+    """Assert a detected ``span``'s metadata matches expectations against ``page``.
+
+    Shared by each category's ``test_span_metadata`` case: category,
+    ``SourceTier.TIER_1`` (every Tier-1 detector's fixed tier), confidence,
+    the raw-text slice the offsets resolve to, and that at least one bbox
+    was resolved.
+    """
+    assert span.category == category
+    assert span.source_tier == SourceTier.TIER_1
+    assert span.confidence == confidence
+    assert page.text[span.start : span.end] == expected_text
+    assert span.bboxes

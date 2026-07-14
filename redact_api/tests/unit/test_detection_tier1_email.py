@@ -9,8 +9,7 @@ from __future__ import annotations
 
 from redact_api.detection.consts import CATEGORY_EMAIL, CONFIDENCE_REGEX_ONLY
 from redact_api.detection.tier1 import detect_email
-from redact_api.models.span import SourceTier
-from redact_api.tests.fixtures.detection_pages import make_page
+from redact_api.tests.fixtures.detection_pages import assert_candidate, make_page
 
 _TRUE_POSITIVES = [
     "jane.doe@example.com",
@@ -42,11 +41,13 @@ class TestDetectEmailTruePositives:
     def test_span_metadata(self) -> None:
         page = make_page("Reach me at jane.doe@example.com anytime")
         (span,) = detect_email(page)
-        assert span.category == CATEGORY_EMAIL
-        assert span.source_tier == SourceTier.TIER_1
-        assert span.confidence == CONFIDENCE_REGEX_ONLY
-        assert page.text[span.start : span.end] == "jane.doe@example.com"
-        assert span.bboxes
+        assert_candidate(
+            span,
+            page,
+            category=CATEGORY_EMAIL,
+            confidence=CONFIDENCE_REGEX_ONLY,
+            expected_text="jane.doe@example.com",
+        )
 
 
 class TestDetectEmailNearMisses:

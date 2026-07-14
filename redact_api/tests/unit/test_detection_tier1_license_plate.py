@@ -9,8 +9,7 @@ from __future__ import annotations
 
 from redact_api.detection.consts import CATEGORY_LICENSE_PLATE, CONFIDENCE_REGEX_ONLY
 from redact_api.detection.tier1 import detect_license_plate
-from redact_api.models.span import SourceTier
-from redact_api.tests.fixtures.detection_pages import make_page
+from redact_api.tests.fixtures.detection_pages import assert_candidate, make_page
 
 _TRUE_POSITIVES = [
     "ABC1234",
@@ -35,11 +34,9 @@ class TestDetectLicensePlateTruePositives:
     def test_span_metadata(self) -> None:
         page = make_page("Plate ABC1234 seen")
         (span,) = detect_license_plate(page)
-        assert span.category == CATEGORY_LICENSE_PLATE
-        assert span.source_tier == SourceTier.TIER_1
-        assert span.confidence == CONFIDENCE_REGEX_ONLY
-        assert page.text[span.start : span.end] == "ABC1234"
-        assert span.bboxes
+        assert_candidate(
+            span, page, category=CATEGORY_LICENSE_PLATE, confidence=CONFIDENCE_REGEX_ONLY, expected_text="ABC1234"
+        )
 
 
 class TestDetectLicensePlateNearMisses:

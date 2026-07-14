@@ -9,8 +9,7 @@ from __future__ import annotations
 
 from redact_api.detection.consts import CATEGORY_ACCOUNT_NUMBER, CONFIDENCE_VALIDATED
 from redact_api.detection.tier1 import detect_account_number
-from redact_api.models.span import SourceTier
-from redact_api.tests.fixtures.detection_pages import make_page
+from redact_api.tests.fixtures.detection_pages import assert_candidate, make_page
 
 _TRUE_POSITIVES = [
     "123456789015",  # 12 digits, Luhn-valid (lower length bound)
@@ -35,11 +34,13 @@ class TestDetectAccountNumberTruePositives:
     def test_span_metadata(self) -> None:
         page = make_page("Account 4242424242424242 active")
         (span,) = detect_account_number(page)
-        assert span.category == CATEGORY_ACCOUNT_NUMBER
-        assert span.source_tier == SourceTier.TIER_1
-        assert span.confidence == CONFIDENCE_VALIDATED
-        assert page.text[span.start : span.end] == "4242424242424242"
-        assert span.bboxes
+        assert_candidate(
+            span,
+            page,
+            category=CATEGORY_ACCOUNT_NUMBER,
+            confidence=CONFIDENCE_VALIDATED,
+            expected_text="4242424242424242",
+        )
 
 
 class TestDetectAccountNumberNearMisses:

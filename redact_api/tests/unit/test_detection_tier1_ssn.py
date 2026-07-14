@@ -8,8 +8,7 @@ from __future__ import annotations
 
 from redact_api.detection.consts import CATEGORY_SSN, CONFIDENCE_VALIDATED
 from redact_api.detection.tier1 import detect_ssn
-from redact_api.models.span import SourceTier
-from redact_api.tests.fixtures.detection_pages import make_page
+from redact_api.tests.fixtures.detection_pages import assert_candidate, make_page
 
 _TRUE_POSITIVES = [
     "123-45-6789",
@@ -41,12 +40,10 @@ class TestDetectSsnTruePositives:
     def test_span_metadata(self) -> None:
         page = make_page("SSN 123-45-6789 on file")
         (span,) = detect_ssn(page)
-        assert span.category == CATEGORY_SSN
-        assert span.source_tier == SourceTier.TIER_1
-        assert span.confidence == CONFIDENCE_VALIDATED
         assert span.page_number == 1
-        assert page.text[span.start : span.end] == "123-45-6789"
-        assert span.bboxes  # at least one contributing word bbox
+        assert_candidate(
+            span, page, category=CATEGORY_SSN, confidence=CONFIDENCE_VALIDATED, expected_text="123-45-6789"
+        )
 
 
 class TestDetectSsnNearMisses:
