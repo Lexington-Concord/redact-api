@@ -2190,7 +2190,7 @@ requires-dist = [
     { name = "pydantic", extras = ["email"], specifier = ">=2.0.0" },
     { name = "pydantic-settings", specifier = ">=2.4.0" },
     { name = "pyjwt", extras = ["crypto"], specifier = ">=2.9.0" },
-    { name = "pymupdf", specifier = ">=1.24.0" },
+    { name = "pymupdf", specifier = ">=1.28.0" },
     { name = "pytesseract", specifier = ">=0.3.10" },
     { name = "python-multipart", specifier = ">=0.0.9" },
     { name = "rapidfuzz", specifier = ">=3.9.0" },
