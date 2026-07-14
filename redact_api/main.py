@@ -51,6 +51,7 @@ from redact_api.core.logging import LoggingMiddleware
 from redact_api.core.metrics import metrics_app
 from redact_api.core.pagination import configure_pagination
 from redact_api.db.session import PoolConfig, create_db_engine, create_session_maker
+from redact_api.storage.client import StorageClient
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +94,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         pool=pool_config,
     )
     app.state.async_session_maker = create_session_maker(app.state.engine)
+
+    # Startup: build the MinIO/S3 client for the redaction pipeline. Construction opens no
+    # connection (aioboto3 sessions are created per-operation), so this cannot fail here;
+    # bucket/credential problems surface on first upload/download.
+    app.state.storage_client = StorageClient(
+        endpoint=settings.minio_endpoint,
+        access_key=settings.minio_access_key,
+        secret_key=settings.minio_secret_key,
+        bucket=settings.minio_bucket,
+        secure=settings.minio_secure,
+    )
 
     # Validate database connectivity (fail fast)
     try:
