@@ -68,8 +68,8 @@ def upgrade() -> None:
         "span",
         sa.Column("page_id", sa.UUID(), nullable=False),
         sa.Column("bboxes", postgresql.JSONB(astext_type=sa.Text()), server_default="[]", nullable=False),
-        sa.Column("text", sqlmodel.sql.sqltypes.AutoString(), nullable=False),
-        sa.Column("category", sqlmodel.sql.sqltypes.AutoString(), nullable=False),
+        sa.Column("text", sqlmodel.sql.sqltypes.AutoString(), nullable=False),  # type: ignore[attr-defined]
+        sa.Column("category", sqlmodel.sql.sqltypes.AutoString(), nullable=False),  # type: ignore[attr-defined]
         sa.Column(
             "source_tier",
             sa.Enum("TIER_1", "TIER_2", "TIER_3", "MANUAL", name="source_tier", native_enum=False),
@@ -95,10 +95,10 @@ def upgrade() -> None:
             sa.Enum("APPROVED", "REJECTED", "EDITED", "MANUAL_SPAN_ADDED", name="audit_action", native_enum=False),
             nullable=False,
         ),
-        sa.Column("category", sqlmodel.sql.sqltypes.AutoString(), nullable=False),
-        sa.Column("text_hash", sqlmodel.sql.sqltypes.AutoString(), nullable=False),
-        sa.Column("entry_hash", sqlmodel.sql.sqltypes.AutoString(), nullable=False),
-        sa.Column("prev_hash", sqlmodel.sql.sqltypes.AutoString(), nullable=False),
+        sa.Column("category", sqlmodel.sql.sqltypes.AutoString(), nullable=False),  # type: ignore[attr-defined]
+        sa.Column("text_hash", sqlmodel.sql.sqltypes.AutoString(), nullable=False),  # type: ignore[attr-defined]
+        sa.Column("entry_hash", sqlmodel.sql.sqltypes.AutoString(), nullable=False),  # type: ignore[attr-defined]
+        sa.Column("prev_hash", sqlmodel.sql.sqltypes.AutoString(), nullable=False),  # type: ignore[attr-defined]
         sa.Column("sequence", sa.Integer(), nullable=False),
         sa.Column("id", sa.UUID(), server_default=sa.text("gen_random_uuid()"), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
@@ -119,7 +119,7 @@ def upgrade() -> None:
         sa.Column(
             "action", sa.Enum("APPROVED", "REJECTED", name="disposition_action", native_enum=False), nullable=False
         ),
-        sa.Column("reason", sqlmodel.sql.sqltypes.AutoString(), nullable=True),
+        sa.Column("reason", sqlmodel.sql.sqltypes.AutoString(), nullable=True),  # type: ignore[attr-defined]
         sa.Column("reviewer_id", sa.UUID(), nullable=False),
         sa.Column("id", sa.UUID(), server_default=sa.text("gen_random_uuid()"), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
