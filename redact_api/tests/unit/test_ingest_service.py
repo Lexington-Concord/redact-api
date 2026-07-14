@@ -142,9 +142,7 @@ class TestIngestPdfRejections:
         assert fake_storage.uploads == {}
 
     @pytest.mark.anyio
-    async def test_mixed_native_and_image_raises_naming_offending_page(
-        self, fake_storage: FakeStorageClient
-    ) -> None:
+    async def test_mixed_native_and_image_raises_naming_offending_page(self, fake_storage: FakeStorageClient) -> None:
         pdf_bytes = build_mixed_native_and_image_pdf(native_pages=2, image_pages=(2,))
 
         with pytest.raises(UnsupportedPageError) as exc_info:

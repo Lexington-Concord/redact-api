@@ -111,9 +111,7 @@ def build_encrypted_pdf(user_password: str = "secret") -> bytes:
     page = _new_letter_page(doc)
     page.insert_text((72, 72), "Encrypted document content", fontsize=12)
     buffer = io.BytesIO()
-    permissions = int(
-        fitz.PDF_PERM_ACCESSIBILITY | fitz.PDF_PERM_PRINT | fitz.PDF_PERM_COPY | fitz.PDF_PERM_ANNOTATE
-    )
+    permissions = int(fitz.PDF_PERM_ACCESSIBILITY | fitz.PDF_PERM_PRINT | fitz.PDF_PERM_COPY | fitz.PDF_PERM_ANNOTATE)
     doc.save(
         buffer,
         encryption=fitz.PDF_ENCRYPT_AES_256,

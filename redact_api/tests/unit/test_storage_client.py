@@ -188,9 +188,7 @@ class TestDownloadFile:
 
 class TestDownloadBytes:
     @pytest.mark.anyio
-    async def test_downloads_and_returns_bytes(
-        self, storage_client: StorageClient, mock_s3_client: AsyncMock
-    ) -> None:
+    async def test_downloads_and_returns_bytes(self, storage_client: StorageClient, mock_s3_client: AsyncMock) -> None:
         mock_body = AsyncMock()
         mock_body.read = AsyncMock(return_value=b"downloaded-bytes")
         mock_s3_client.get_object = AsyncMock(return_value={"Body": mock_body})

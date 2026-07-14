@@ -92,9 +92,7 @@ class StorageClient:
         """
         async with self._client() as s3:
             if content_type is not None:
-                await s3.upload_file(
-                    str(file_path), self._bucket, object_key, ExtraArgs={"ContentType": content_type}
-                )
+                await s3.upload_file(str(file_path), self._bucket, object_key, ExtraArgs={"ContentType": content_type})
             else:
                 await s3.upload_file(str(file_path), self._bucket, object_key)
             LOGGER.info(
