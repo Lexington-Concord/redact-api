@@ -19,6 +19,10 @@ dependencies = [
   "python-multipart>=0.0.9",
   "slowapi>=0.1.9",
   "tenacity>=9.0.0",
+  "pymupdf>=1.24.0",
+  "pytesseract>=0.3.10",
+  "pillow>=10.1.0",
+  "rapidfuzz>=3.9.0",
 ]
 
 [build-system]
@@ -84,6 +88,9 @@ max-complexity = 10
 "redact_api/tests/**" = ["S", "PT009", "PLR2004", "ARG002", "TRY002"]
 # PLC0415 allows late imports for optional dependencies (azure, aws, gcs)
 "redact_api/core/storage.py" = ["PLC0415"]
+# S105 false positive: the VerifyVerdict.PASS enum member (value "pass") is a
+# verdict, not a hardcoded password. Renaming would break the R3 public contract.
+"redact_api/redaction/models.py" = ["S105"]
 
 [tool.ruff.format]
 quote-style = "double"
@@ -110,6 +117,11 @@ ignore_missing_imports = true
 module = ["google.*"]
 ignore_missing_imports = true
 
+# PyMuPDF (imported as fitz) and pytesseract ship no type stubs / py.typed marker
+[[tool.mypy.overrides]]
+module = ["fitz", "pytesseract"]
+ignore_missing_imports = true
+
 [tool.coverage.run]
 source = ["redact_api"]
 # Required for accurate coverage with FastAPI + async SQLAlchemy
@@ -132,6 +144,9 @@ exclude_lines = [
 addopts = "--tb=short -n auto --cov=redact_api --cov-report=term-missing --cov-fail-under=90"
 asyncio_mode = "auto"
 testpaths = ["redact_api/tests"]
+markers = [
+  "real_ocr: exercises the real tesseract OCR engine; skipped when the tesseract binary is absent (e.g. local dev), always runs in CI where tesseract-ocr is installed",
+]
 
 [project.optional-dependencies]
 # Object storage provider dependencies (install as needed)

@@ -7,6 +7,11 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
+# tesseract-ocr is required at runtime by the redaction verify gate (pytesseract).
+# Installed before the dependency sync so this layer is cached across pure-Python
+# dependency changes.
+RUN apk add --no-cache tesseract-ocr tesseract-ocr-data-eng
+
 COPY pyproject.toml uv.lock ./
 RUN uv sync --locked -n --no-progress
 COPY scripts ./scripts
