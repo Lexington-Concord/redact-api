@@ -52,7 +52,10 @@ class TestUnsupportedPageError:
 
     def test_str_contains_pinned_wording(self) -> None:
         error = UnsupportedPageError(page_numbers=[3])
-        assert "no extractable text" in str(error)
+        message = str(error)
+        assert "no extractable text" in message
+        assert "V1 supports native PDFs only" in message
+        assert "OCR ingest is V2" in message
 
     def test_single_offending_page(self) -> None:
         error = UnsupportedPageError(page_numbers=[7])

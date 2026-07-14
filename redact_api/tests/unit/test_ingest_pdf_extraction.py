@@ -7,12 +7,13 @@ redact_api.tests.fixtures.ingest_pdfs (PyMuPDF only, no second PDF library).
 from __future__ import annotations
 
 import itertools
+from unittest.mock import patch
 
 import fitz
 import pytest
 
 from redact_api.ingest.consts import RASTER_DPI
-from redact_api.ingest.exceptions import UnsupportedPageError
+from redact_api.ingest.exceptions import MalformedPdfError, UnsupportedPageError
 from redact_api.ingest.pdf import extract_pages
 from redact_api.tests.fixtures.ingest_pdfs import (
     PAGE_HEIGHT,
@@ -208,6 +209,18 @@ class TestTextConstruction:
                 assert separator == " "
             else:
                 assert separator == "\n"
+
+
+class TestMalformedPdfDetection:
+    def test_bare_runtime_error_wrapped_as_malformed(self) -> None:
+        # fitz.open can raise a bare RuntimeError (distinct from its
+        # FileDataError subclass) for some corruption shapes; both must be
+        # wrapped as MalformedPdfError per the ingest error contract (R8).
+        with (
+            patch("redact_api.ingest.pdf.fitz.open", side_effect=RuntimeError("mupdf: broken stream")),
+            pytest.raises(MalformedPdfError),
+        ):
+            extract_pages(b"irrelevant")
 
 
 class TestImageOnlyPage:
