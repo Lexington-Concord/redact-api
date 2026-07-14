@@ -133,12 +133,16 @@ async def create_job(
     session.add(job)
     await session.flush()  # type: ignore[attr-defined]  # assign job.id
 
-    await storage.upload_bytes(original_key, pdf_bytes, content_type=_PDF_CONTENT_TYPE)
-
+    # Why: ingest runs before the original is uploaded so a rejected PDF (oversized,
+    # encrypted, malformed, unsupported page) never leaves an orphaned original blob in
+    # storage with no committed DB row pointing at it -- ingest_pdf validates fully in
+    # memory before it uploads anything of its own (see its docstring).
     try:
         await ingest_pdf(document.id, pdf_bytes, storage)
     except (DocumentTooLargeError, EncryptedPdfError, MalformedPdfError, UnsupportedPageError) as error:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=error.message) from error
+
+    await storage.upload_bytes(original_key, pdf_bytes, content_type=_PDF_CONTENT_TYPE)
 
     await transition_job_status(session, job, JobStatus.INGESTED)
     await transition_job_status(session, job, JobStatus.DETECTED)
