@@ -154,13 +154,15 @@ async def append_audit_entry(
     prev_hash, sequence = await _next_chain_link(session, job_id)
     text_hash = _hash_hex(normalize_text(event.text))
     created_at = datetime.now(UTC)
+    # Pinned 6-key payload (resolution #6) -- do not add or remove keys. text_hash is
+    # stored on the row but deliberately excluded from the hashed payload.
     payload: dict[str, str | None] = {
+        "job_id": str(job_id),
+        "span_id": str(event.span_id) if event.span_id is not None else None,
         "action": event.action.value,
         "category": event.category,
-        "created_at": created_at.isoformat(),
         "reviewer": str(event.reviewer_id),
-        "span_id": str(event.span_id) if event.span_id is not None else None,
-        "text_hash": text_hash,
+        "created_at": created_at.isoformat(),
     }
     entry_hash = compute_entry_hash(prev_hash, payload)
 

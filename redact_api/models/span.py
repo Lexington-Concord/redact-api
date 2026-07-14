@@ -16,15 +16,18 @@ from redact_api.models.base import TimestampedTable
 
 
 class SourceTier(StrEnum):
-    """Detection source that produced a span.
+    """Detection provenance tier for a candidate span.
 
-    Mirrors the recoverability checks the verify gate runs (``CheckType``) plus a
-    ``MANUAL`` tier for reviewer-added spans (see ``AuditAction.MANUAL_SPAN_ADDED``).
+    Reflects how the span was detected (not how the verify gate later re-checks
+    recoverability -- that's ``redact_api.redaction.models.CheckType``, a separate
+    taxonomy). ``TIER_1``/``TIER_2``/``TIER_3`` rank detector confidence for a
+    candidate; ``MANUAL`` marks reviewer-added spans (see
+    ``AuditAction.MANUAL_SPAN_ADDED``).
     """
 
-    TEXT_LAYER = "text_layer"
-    OCR = "ocr"
-    METADATA = "metadata"
+    TIER_1 = "tier_1"
+    TIER_2 = "tier_2"
+    TIER_3 = "tier_3"
     MANUAL = "manual"
 
 

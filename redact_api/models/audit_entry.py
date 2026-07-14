@@ -82,6 +82,7 @@ class AuditEntry(TimestampedTable, AuditEntryBase, table=True):
     __table_args__ = (
         sa.UniqueConstraint("job_id", "sequence", name="uq_audit_entry_job_sequence"),
         sa.Index("ix_audit_entry_organization_id", "organization_id"),
+        sa.Index("ix_audit_entry_span_id", "span_id"),
     )
 
 
