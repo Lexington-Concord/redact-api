@@ -129,9 +129,7 @@ class TestUploadFile:
         result = await storage_client.upload_file("documents/doc-1/page-1.png", local_file)
 
         assert result == "documents/doc-1/page-1.png"
-        mock_s3_client.upload_file.assert_awaited_once_with(
-            str(local_file), BUCKET, "documents/doc-1/page-1.png", ExtraArgs={}
-        )
+        mock_s3_client.upload_file.assert_awaited_once_with(str(local_file), BUCKET, "documents/doc-1/page-1.png")
 
     @pytest.mark.anyio
     async def test_uploads_with_content_type(

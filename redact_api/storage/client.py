@@ -90,9 +90,13 @@ class StorageClient:
         Returns:
             The object key that was uploaded
         """
-        extra_args = {"ContentType": content_type} if content_type else {}
         async with self._client() as s3:
-            await s3.upload_file(str(file_path), self._bucket, object_key, ExtraArgs=extra_args)
+            if content_type is not None:
+                await s3.upload_file(
+                    str(file_path), self._bucket, object_key, ExtraArgs={"ContentType": content_type}
+                )
+            else:
+                await s3.upload_file(str(file_path), self._bucket, object_key)
             LOGGER.info(
                 "file_uploaded",
                 extra={"bucket": self._bucket, "key": object_key, "size_bytes": file_path.stat().st_size},
