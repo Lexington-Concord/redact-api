@@ -124,10 +124,7 @@ async def transition_job_status(
 async def _next_chain_link(session: AsyncSession, job_id: UUID) -> tuple[str, int]:
     """Return ``(prev_hash, sequence)`` for the next audit entry of ``job_id``."""
     stmt = (
-        select(AuditEntry)
-        .where(col(AuditEntry.job_id) == job_id)
-        .order_by(col(AuditEntry.sequence).desc())
-        .limit(1)
+        select(AuditEntry).where(col(AuditEntry.job_id) == job_id).order_by(col(AuditEntry.sequence).desc()).limit(1)
     )
     result = await session.execute(stmt)
     last = result.scalars().first()

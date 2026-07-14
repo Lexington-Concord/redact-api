@@ -8,7 +8,7 @@ JSON/nullable column behavior.
 
 from __future__ import annotations
 
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy import func, select
@@ -45,12 +45,12 @@ async def _make_user(session: AsyncSession) -> User:
     return user
 
 
-async def _make_document(session: AsyncSession, organization_id: object) -> Document:
+async def _make_document(session: AsyncSession, organization_id: UUID) -> Document:
     document = Document(
         filename="doc.pdf",
         content_type="application/pdf",
         file_size=1024,
-        organization_id=organization_id,  # type: ignore[arg-type]
+        organization_id=organization_id,
         storage_path=f"path/{uuid4()}",
         storage_url="http://storage/doc",
     )
@@ -59,16 +59,16 @@ async def _make_document(session: AsyncSession, organization_id: object) -> Docu
     return document
 
 
-async def _make_page(session: AsyncSession, document_id: object, page_number: int = 1) -> Page:
-    page = Page(document_id=document_id, page_number=page_number)  # type: ignore[arg-type]
+async def _make_page(session: AsyncSession, document_id: UUID, page_number: int = 1) -> Page:
+    page = Page(document_id=document_id, page_number=page_number)
     session.add(page)
     await session.flush()  # type: ignore[attr-defined]
     return page
 
 
-async def _make_span(session: AsyncSession, page_id: object, *, text: str = "John Doe") -> Span:
+async def _make_span(session: AsyncSession, page_id: UUID, *, text: str = "John Doe") -> Span:
     span = Span(
-        page_id=page_id,  # type: ignore[arg-type]
+        page_id=page_id,
         bboxes=[[1.0, 2.0, 3.0, 4.0]],
         text=text,
         category="PERSON",
@@ -261,13 +261,17 @@ class TestRedactionTenantScoping:
         await session.commit()
 
         jobs = (
-            await session.execute(select(RedactionJob).where(col(RedactionJob.organization_id) == org_a.id))
-        ).scalars().all()
+            (await session.execute(select(RedactionJob).where(col(RedactionJob.organization_id) == org_a.id)))
+            .scalars()
+            .all()
+        )
         assert [job.id for job in jobs] == [job_a.id]
 
         audits = (
-            await session.execute(select(AuditEntry).where(col(AuditEntry.organization_id) == org_a.id))
-        ).scalars().all()
+            (await session.execute(select(AuditEntry).where(col(AuditEntry.organization_id) == org_a.id)))
+            .scalars()
+            .all()
+        )
         assert len(audits) == 1
         assert audits[0].organization_id == org_a.id
 
