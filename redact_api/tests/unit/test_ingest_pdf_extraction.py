@@ -6,6 +6,8 @@ redact_api.tests.fixtures.ingest_pdfs (PyMuPDF only, no second PDF library).
 
 from __future__ import annotations
 
+import itertools
+
 import fitz
 import pytest
 
@@ -167,7 +169,7 @@ class TestTextConstruction:
         for word_bbox in page.words:
             assert page.text[word_bbox.start : word_bbox.end] != ""
 
-        for previous_word, next_word in zip(page.words, page.words[1:], strict=True):
+        for previous_word, next_word in itertools.pairwise(page.words):
             separator = page.text[previous_word.end : next_word.start]
             assert separator in (" ", "\n")
 
