@@ -71,6 +71,33 @@ def build_multi_page_pdf(page_count: int = 3) -> bytes:
     return data
 
 
+def build_pii_sample_pdf() -> bytes:
+    """A single-page PDF whose native text embeds one instance of each Tier-1 category.
+
+    Used by the detection end-to-end test to exercise the detectors against real
+    ``extract_pages`` output (reconstructed ``PageModel.text`` + ``WordBBox``
+    offsets), not hand-built pages. Each PII value sits on its own line, and the
+    DOB line keeps its keyword anchor on the same line as the date.
+    """
+    lines = [
+        "SSN 123-45-6789",
+        "Call 212-555-0142 today",
+        "Email jane.doe@example.com",
+        "Account 4242424242424242",
+        "Plate ABC1234",
+        "DOB: 01/02/1990",
+    ]
+    doc = fitz.open()
+    page = _new_letter_page(doc)
+    y = 72.0
+    for line in lines:
+        page.insert_text((72, y), line, fontsize=12)
+        y += 28.0
+    data = doc.tobytes()
+    doc.close()
+    return data
+
+
 def build_rotated_page_pdf(rotation: int = 90) -> bytes:
     """A single-page PDF with the given page rotation applied."""
     doc = fitz.open()
