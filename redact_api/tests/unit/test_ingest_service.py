@@ -43,9 +43,11 @@ class FakeStorageClient(StorageClient):
     def __init__(self) -> None:
         super().__init__(access_key="fake-access", secret_key="fake-secret", bucket="fake-bucket")
         self.uploads: dict[str, bytes] = {}
+        self.content_types: dict[str, str | None] = {}
 
-    async def upload_bytes(self, object_key: str, data: bytes) -> str:
+    async def upload_bytes(self, object_key: str, data: bytes, *, content_type: str | None = None) -> str:
         self.uploads[object_key] = data
+        self.content_types[object_key] = content_type
         return object_key
 
 
@@ -65,7 +67,6 @@ class TestIngestPdfHappyPath:
 
         result = await ingest_pdf(DOCUMENT_ID, pdf_bytes, fake_storage)
 
-        assert result.document_id == DOCUMENT_ID
         assert result.page_count == 2
         assert len(result.pages) == 2
         for page in result.pages:
@@ -82,10 +83,12 @@ class TestIngestPdfHappyPath:
             raster_key = keys.page_raster_key(DOCUMENT_ID, page_number)
             text_layer_key = keys.page_text_layer_key(DOCUMENT_ID, page_number)
             assert fake_storage.uploads[raster_key].startswith(PNG_MAGIC)
+            assert fake_storage.content_types[raster_key] == "image/png"
             payload = json.loads(fake_storage.uploads[text_layer_key])
             assert payload["page_number"] == page_number
             assert isinstance(payload["text"], str)
             assert isinstance(payload["words"], list)
+            assert fake_storage.content_types[text_layer_key] == "application/json"
 
     @pytest.mark.anyio
     async def test_text_layer_json_schema(self, fake_storage: FakeStorageClient) -> None:

@@ -75,7 +75,7 @@ async def ingest_pdf(document_id: UUID, pdf_bytes: bytes, storage: StorageClient
         raise
 
     pages = [await _upload_page(document_id, extraction, storage) for extraction in extractions]
-    result = IngestResult(document_id=document_id, page_count=len(pages), pages=pages)
+    result = IngestResult(page_count=len(pages), pages=pages)
 
     documents_ingested_total.labels(environment=settings.environment).inc()
     LOGGER.info(
@@ -100,8 +100,8 @@ async def _upload_page(document_id: UUID, extraction: PageExtraction, storage: S
     raster_key = keys.page_raster_key(document_id, extraction.page.page_number)
     text_layer_key = keys.page_text_layer_key(document_id, extraction.page.page_number)
 
-    await storage.upload_bytes(raster_key, extraction.png_bytes)
-    await storage.upload_bytes(text_layer_key, _text_layer_payload(extraction.page))
+    await storage.upload_bytes(raster_key, extraction.png_bytes, content_type="image/png")
+    await storage.upload_bytes(text_layer_key, _text_layer_payload(extraction.page), content_type="application/json")
 
     return extraction.page.model_copy(update={"raster_key": raster_key})
 
