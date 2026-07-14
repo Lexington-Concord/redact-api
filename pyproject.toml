@@ -19,6 +19,10 @@ dependencies = [
   "python-multipart>=0.0.9",
   "slowapi>=0.1.9",
   "tenacity>=9.0.0",
+  "pymupdf>=1.24.0",
+  "pytesseract>=0.3.10",
+  "pillow>=10.0.0",
+  "rapidfuzz>=3.9.0",
 ]
 
 [build-system]
@@ -110,6 +114,11 @@ ignore_missing_imports = true
 module = ["google.*"]
 ignore_missing_imports = true
 
+# PyMuPDF (fitz) and pytesseract ship no type stubs / py.typed marker
+[[tool.mypy.overrides]]
+module = ["fitz.*", "fitz", "pymupdf.*", "pymupdf", "pytesseract.*", "pytesseract"]
+ignore_missing_imports = true
+
 [tool.coverage.run]
 source = ["redact_api"]
 # Required for accurate coverage with FastAPI + async SQLAlchemy
@@ -132,6 +141,9 @@ exclude_lines = [
 addopts = "--tb=short -n auto --cov=redact_api --cov-report=term-missing --cov-fail-under=90"
 asyncio_mode = "auto"
 testpaths = ["redact_api/tests"]
+markers = [
+  "real_ocr: exercises the real tesseract OCR engine; skipped when the tesseract binary is absent (e.g. local dev), always runs in CI where tesseract-ocr is installed",
+]
 
 [project.optional-dependencies]
 # Object storage provider dependencies (install as needed)
