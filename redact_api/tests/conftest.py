@@ -46,6 +46,7 @@ from redact_api.main import app
 from redact_api.models.membership import Membership, MembershipRole
 from redact_api.models.organization import Organization
 from redact_api.models.user import User
+from redact_api.storage.client import StorageClient
 
 # Import settings fixtures for test isolation and pytest-xdist compatibility
 from redact_api.tests.fixtures.settings import (  # noqa: F401
@@ -61,6 +62,35 @@ POSTGRES_PORT = 5432
 SOCKET_TIMEOUT_SECONDS = 1
 DOCKER_TIMEOUT_SECONDS = 30.0
 DOCKER_PAUSE_SECONDS = 0.5
+
+
+class FakeStorageClient(StorageClient):
+    """In-memory ``StorageClient`` double for HTTP integration tests.
+
+    Subclasses the real client so ``StorageClientDep``/type checks still hold, but records
+    uploads in a dict and serves downloads from it (extending the ingest-only double in
+    ``tests/unit/test_ingest_service.py`` with ``download_bytes``, which apply/export need).
+    Tests seed original/redacted PDFs by writing directly into ``uploads``.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(access_key="fake-access", secret_key="fake-secret", bucket="fake-bucket")
+        self.uploads: dict[str, bytes] = {}
+        self.content_types: dict[str, str | None] = {}
+
+    async def upload_bytes(self, object_key: str, data: bytes, *, content_type: str | None = None) -> str:
+        self.uploads[object_key] = data
+        self.content_types[object_key] = content_type
+        return object_key
+
+    async def download_bytes(self, object_key: str) -> bytes:
+        return self.uploads[object_key]
+
+
+@pytest.fixture
+def fake_storage_client() -> FakeStorageClient:
+    """A fresh in-memory storage double, wired into ``app.state.storage_client`` by ``client``."""
+    return FakeStorageClient()
 
 
 # =============================================================================
@@ -631,6 +661,7 @@ async def authenticated_client(
 async def client(
     engine: AsyncEngine,
     session_maker: async_sessionmaker[AsyncSession],
+    fake_storage_client: FakeStorageClient,
 ) -> AsyncGenerator[AsyncClient]:
     """HTTP client that injects Oathkeeper-style auth headers.
 
@@ -661,6 +692,8 @@ async def client(
     # Set app.state for pytest-xdist compatibility (lifespan pattern)
     app.state.engine = engine
     app.state.async_session_maker = session_maker
+    # Inject the in-memory storage double so redaction-job endpoints have a client.
+    app.state.storage_client = fake_storage_client
 
     # Override session dependency
     app.dependency_overrides[get_session] = get_session_override
