@@ -2119,6 +2119,7 @@ name = "redact-api"
 version = "0.3.0"
 source = { editable = "." }
 dependencies = [
+    { name = "aioboto3" },
     { name = "alembic" },
     { name = "asyncpg" },
     { name = "ecs-logging" },
@@ -2174,6 +2175,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "aioboto3", specifier = ">=13.0.0" },
     { name = "aioboto3", marker = "extra == 'aws'", specifier = ">=13.0.0" },
     { name = "alembic", specifier = ">=1.13.0" },
     { name = "asyncpg", specifier = ">=0.29.0" },

@@ -115,6 +115,12 @@ memberships_created_total = Counter(
     ["environment"],
 )
 
+documents_ingested_total = Counter(
+    "documents_ingested_total",
+    "Total number of documents successfully ingested",
+    ["environment"],
+)
+
 active_memberships_gauge = Gauge(
     "active_memberships_gauge",
     "Current number of active memberships",
