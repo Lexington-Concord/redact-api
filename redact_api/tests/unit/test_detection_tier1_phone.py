@@ -9,8 +9,7 @@ from __future__ import annotations
 
 from redact_api.detection.consts import CATEGORY_PHONE, CONFIDENCE_REGEX_ONLY
 from redact_api.detection.tier1 import detect_phone
-from redact_api.models.span import SourceTier
-from redact_api.tests.fixtures.detection_pages import make_page
+from redact_api.tests.fixtures.detection_pages import assert_candidate, make_page
 
 _TRUE_POSITIVES = [
     "(212) 555-0142",
@@ -40,11 +39,9 @@ class TestDetectPhoneTruePositives:
     def test_span_metadata(self) -> None:
         page = make_page("Call 212-555-0142 today")
         (span,) = detect_phone(page)
-        assert span.category == CATEGORY_PHONE
-        assert span.source_tier == SourceTier.TIER_1
-        assert span.confidence == CONFIDENCE_REGEX_ONLY
-        assert page.text[span.start : span.end] == "212-555-0142"
-        assert span.bboxes
+        assert_candidate(
+            span, page, category=CATEGORY_PHONE, confidence=CONFIDENCE_REGEX_ONLY, expected_text="212-555-0142"
+        )
 
     def test_multi_word_phone_resolves_multiple_bboxes(self) -> None:
         page = make_page("Call (212) 555-0142 today")

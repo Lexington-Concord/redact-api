@@ -52,7 +52,7 @@ class TestDetectDobTruePositives:
         filler = "x" * (DOB_ANCHOR_WINDOW_CHARS - _ANCHOR_LEN)
         page = make_page(f"DOB{filler}01/02/1990")
         (span,) = detect_dob(page)
-        assert span.text == "01/02/1990"
+        assert page.text[span.start : span.end] == "01/02/1990"
 
 
 class TestDetectDobNearMisses:
