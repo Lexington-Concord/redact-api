@@ -108,9 +108,7 @@ class TestApprovedSpanAndApplyResultContract:
     def test_approved_span_holds_multiple_bboxes(self) -> None:
         # R1: bboxes is a list because one logical span (e.g. text wrapping across
         # lines) can cover more than one bbox on the same page.
-        span = ApprovedSpan(
-            page_number=1, bboxes=[(1.0, 2.0, 3.0, 4.0), (1.0, 5.0, 3.0, 7.0)], text="secret"
-        )
+        span = ApprovedSpan(page_number=1, bboxes=[(1.0, 2.0, 3.0, 4.0), (1.0, 5.0, 3.0, 7.0)], text="secret")
         assert span.bboxes == [(1.0, 2.0, 3.0, 4.0), (1.0, 5.0, 3.0, 7.0)]
 
     def test_apply_result_passed_true_when_verdict_pass(self) -> None:
@@ -244,6 +242,26 @@ class TestApplyMetadataStrip:
             assert document_has_javascript(doc) is False
         finally:
             doc.close()
+
+    def test_apply_invokes_strip_metadata_on_rebuilt_document(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # Wiring regression guard: _rebuild_redacted_pdf's `out` document is built solely
+        # from rasterized images and never receives any of `source`'s docinfo/XMP/embedded
+        # -files/JS, so the four tests above would still pass even if the `_strip_metadata
+        # (out)` call were deleted from _rebuild_redacted_pdf entirely -- they prove the
+        # rebuild is structurally clean, not that the strip checklist actually runs. This
+        # test proves apply() invokes _strip_metadata on its rebuilt output directly, so a
+        # future edit that drops or skips that call fails here instead of shipping unnoticed.
+        calls: list[fitz.Document] = []
+        original = _strip_metadata
+
+        def _spy(doc: fitz.Document) -> None:
+            calls.append(doc)
+            original(doc)
+
+        monkeypatch.setattr("redact_api.redaction.apply._strip_metadata", _spy)
+        pdf_bytes, ref = make_pii_source_pdf()
+        apply(pdf_bytes, [_span(ref)])
+        assert len(calls) == 1
 
     def test_strip_document_javascript_removes_js_directly(self) -> None:
         # Direct unit test of the private helper: it must actually remove JS from a doc

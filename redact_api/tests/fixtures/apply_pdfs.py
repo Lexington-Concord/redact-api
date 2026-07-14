@@ -28,24 +28,23 @@ import io
 from typing import NamedTuple
 
 import fitz
-from PIL import Image, ImageDraw, ImageFont
-
-# Default subject burned in across fixtures; a two-token name exercises whitespace
-# normalization without being so short OCR noise would spuriously match it.
-DEFAULT_REDACTED_STRING = "John Smith"
-
-# Benign label rendered on pages so they look like a real redacted body, not a blank page.
-REDACTED_LABEL = "[REDACTED]"
+from PIL import Image
+from redact_api.tests.fixtures.redaction_pdfs import (
+    _IMAGE_HEIGHT,
+    _IMAGE_WIDTH,
+    DEFAULT_REDACTED_STRING,
+    REDACTED_LABEL,
+    _render_text_image,
+)
 
 _PAGE_WIDTH = 400.0
 _PAGE_HEIGHT = 200.0
 _TEXT_ORIGIN = fitz.Point(72, 100)
 _TEXT_FONTSIZE = 14
 
-# Source-image geometry for the image-only body label (mirrors redaction_pdfs.py).
-_IMAGE_WIDTH = 1000
-_IMAGE_HEIGHT = 200
-_LABEL_FONT_SIZE = 90
+# Rect the shared _render_text_image() label is drawn into on this file's own (narrower)
+# page width -- reuses redaction_pdfs.py's image geometry so the aspect ratio always
+# matches what that function actually renders.
 _IMAGE_RECT = fitz.Rect(0, 0, _PAGE_WIDTH, _PAGE_WIDTH * _IMAGE_HEIGHT / _IMAGE_WIDTH)
 
 # EXIF Artist tag id (0x013B); attached to the annotated-EXIF fixture's embedded image.
@@ -61,17 +60,6 @@ class PiiSpanRef(NamedTuple):
     page_number: int
     bbox: tuple[float, float, float, float]
     text: str
-
-
-def _render_label_image(text: str) -> bytes:
-    """Render ``text`` as black glyphs on a white PNG (visible, no text layer)."""
-    img = Image.new("RGB", (_IMAGE_WIDTH, _IMAGE_HEIGHT), "white")
-    draw = ImageDraw.Draw(img)
-    font = ImageFont.load_default(size=_LABEL_FONT_SIZE)
-    draw.text((30, 40), text, fill="black", font=font)
-    buffer = io.BytesIO()
-    img.save(buffer, format="PNG")
-    return buffer.getvalue()
 
 
 def _text_bbox(page: fitz.Page, text: str) -> tuple[float, float, float, float]:
@@ -141,11 +129,9 @@ def make_js_and_embedded_file_pdf(redacted_string: str = DEFAULT_REDACTED_STRING
     """
     doc = fitz.open()
     page = doc.new_page(width=_PAGE_WIDTH, height=_PAGE_HEIGHT)
-    page.insert_image(_IMAGE_RECT, stream=_render_label_image(REDACTED_LABEL))
+    page.insert_image(_IMAGE_RECT, stream=_render_text_image(REDACTED_LABEL))
     doc.set_metadata({"title": "Quarterly Report", "author": redacted_string})
-    doc.set_xml_metadata(
-        f"<x:xmpmeta xmlns:x='adobe:ns:meta/'><dc:creator>{redacted_string}</dc:creator></x:xmpmeta>"
-    )
+    doc.set_xml_metadata(f"<x:xmpmeta xmlns:x='adobe:ns:meta/'><dc:creator>{redacted_string}</dc:creator></x:xmpmeta>")
     doc.embfile_add("payload.txt", redacted_string.encode("utf-8"), filename="payload.txt")
     inject_document_javascript(doc, f"app.alert('{redacted_string}');")
     data: bytes = doc.tobytes()
