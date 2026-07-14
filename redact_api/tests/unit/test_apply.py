@@ -20,7 +20,7 @@ import fitz
 import pytest
 from PIL import Image
 
-from redact_api.redaction.apply import _strip_document_javascript, apply
+from redact_api.redaction.apply import _strip_document_javascript, _strip_metadata, apply
 from redact_api.redaction.consts import APPLY_OUTPUT_DPI, BOX_PADDING_PTS
 from redact_api.redaction.models import (
     ApplyResult,
@@ -233,6 +233,24 @@ class TestApplyMetadataStrip:
             assert document_has_javascript(doc) is True
             _strip_document_javascript(doc)
             assert document_has_javascript(doc) is False
+        finally:
+            doc.close()
+
+    def test_strip_metadata_removes_embedded_files_and_docinfo_directly(self) -> None:
+        # Direct unit test of the R5 checklist against a doc that actually carries an
+        # embedded file, docinfo, and XMP -- apply's rebuilt image-only doc has none, so
+        # this exercises the strip calls (the convenience-copy guard) they otherwise skip.
+        doc = fitz.open()
+        doc.new_page()
+        doc.set_metadata({"author": DEFAULT_REDACTED_STRING})
+        doc.set_xml_metadata(f"<x:xmpmeta xmlns:x='adobe:ns:meta/'>{DEFAULT_REDACTED_STRING}</x:xmpmeta>")
+        doc.embfile_add("payload.txt", DEFAULT_REDACTED_STRING.encode("utf-8"), filename="payload.txt")
+        try:
+            assert doc.embfile_names() == ["payload.txt"]
+            _strip_metadata(doc)
+            assert doc.embfile_names() == []
+            assert not doc.get_xml_metadata()
+            assert [value for value in doc.metadata.values() if value and DEFAULT_REDACTED_STRING in value] == []
         finally:
             doc.close()
 
