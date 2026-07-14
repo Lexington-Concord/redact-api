@@ -7,8 +7,6 @@ bounding boxes) and a reference to its rasterized PNG in object storage.
 
 from __future__ import annotations
 
-from uuid import UUID
-
 from pydantic import BaseModel
 
 
@@ -29,6 +27,8 @@ class PageModel(BaseModel):
     """Canonical per-page extraction result: raster reference + word-level text layer."""
 
     page_number: int
+    width: float
+    height: float
     text: str
     words: list[WordBBox]
     rotation: int
@@ -38,6 +38,5 @@ class PageModel(BaseModel):
 class IngestResult(BaseModel):
     """Aggregate result of ingesting a single PDF document."""
 
-    document_id: UUID
     page_count: int
     pages: list[PageModel]

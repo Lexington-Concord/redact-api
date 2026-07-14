@@ -54,7 +54,7 @@ def extract_pages(pdf_bytes: bytes) -> list[PageExtraction]:
     """
     try:
         doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-    except fitz.FileDataError as exc:
+    except (fitz.FileDataError, RuntimeError) as exc:
         message = "PDF is malformed or corrupt and cannot be opened"
         raise MalformedPdfError(message) from exc
 
@@ -96,6 +96,8 @@ def _extract_page(page: fitz.Page, page_number: int) -> PageExtraction:
 
     page_model = PageModel(
         page_number=page_number,
+        width=page.rect.width,
+        height=page.rect.height,
         text=text,
         words=words,
         rotation=page.rotation,

@@ -60,6 +60,13 @@ class TestMultiPageExtraction:
         for extraction in extractions:
             assert extraction.page.text != ""
 
+    def test_page_model_width_and_height_in_pdf_points(self) -> None:
+        pdf_bytes = build_multi_page_pdf(page_count=2)
+        extractions = extract_pages(pdf_bytes)
+        for extraction in extractions:
+            assert extraction.page.width == PAGE_WIDTH
+            assert extraction.page.height == PAGE_HEIGHT
+
     def test_word_offsets_round_trip_against_independent_fitz_extraction(self) -> None:
         pdf_bytes = build_multi_page_pdf(page_count=2)
         extractions = extract_pages(pdf_bytes)
@@ -98,6 +105,15 @@ class TestRotatedPageExtraction:
         expected_width = round(PAGE_HEIGHT * RASTER_DPI / 72)
         expected_height = round(PAGE_WIDTH * RASTER_DPI / 72)
         assert (pixmap.width, pixmap.height) == (expected_width, expected_height)
+
+    def test_page_model_width_height_reflect_rotation(self) -> None:
+        # fitz.Page.rect (unlike page.mediabox) already applies rotation, so
+        # a 90-degree-rotated Letter page reports swapped width/height -- the
+        # same convention the raster pixmap dimensions above rely on.
+        pdf_bytes = build_rotated_page_pdf(rotation=90)
+        extractions = extract_pages(pdf_bytes)
+        assert extractions[0].page.width == PAGE_HEIGHT
+        assert extractions[0].page.height == PAGE_WIDTH
 
 
 class TestNonAsciiExtraction:
