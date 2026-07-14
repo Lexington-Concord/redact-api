@@ -44,7 +44,10 @@ class UnsupportedPageError(IngestError):
     def __init__(self, page_numbers: list[int]) -> None:
         self.page_numbers = page_numbers
         pages_str = ", ".join(str(page_number) for page_number in page_numbers)
-        message = f"Document contains unsupported page(s) with no extractable text: {pages_str}"
+        message = (
+            f"Document contains scanned/image-only page(s) with no extractable text: {pages_str}; "
+            "V1 supports native PDFs only -- OCR ingest is V2"
+        )
         self.message = message
         super().__init__(message)
 
