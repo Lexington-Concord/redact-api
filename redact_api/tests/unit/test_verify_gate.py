@@ -20,6 +20,7 @@ from collections.abc import Callable
 
 import fitz
 import pytest
+from rapidfuzz import fuzz
 
 from redact_api.redaction import consts
 from redact_api.redaction.consts import OCR_MATCH_THRESHOLD
@@ -128,10 +129,23 @@ class TestOCRCheck:
         assert ocr_findings[0].match_score is not None
         assert ocr_findings[0].match_score >= OCR_MATCH_THRESHOLD
 
-    def test_ocr_check_uses_rapidfuzz_partial_ratio_and_named_threshold(self) -> None:
-        # The threshold is a single named, auditable constant in the consts module.
+    def test_ocr_check_exact_match_scores_100_and_clears_threshold(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # An OCR read that is an exact (post-normalization) match for the redacted
+        # string must score 100 via the real rapidfuzz.fuzz.partial_ratio call, and
+        # 100 must clear the named threshold -- proving the check is actually wired
+        # to rapidfuzz rather than merely comparing the same constant to itself.
+        assert (
+            fuzz.partial_ratio(normalize_text(DEFAULT_REDACTED_STRING), normalize_text(DEFAULT_REDACTED_STRING))
+            == 100.0
+        )
+        monkeypatch.setattr("pytesseract.image_to_string", _stub_ocr_returning(DEFAULT_REDACTED_STRING))
+        result = verify(make_image_only_pdf(), [DEFAULT_REDACTED_STRING])
+        ocr_findings = _findings_of(result, CheckType.OCR)
+        assert result.verdict == VerifyVerdict.FAIL
+        assert ocr_findings
+        assert ocr_findings[0].match_score == 100.0
+        assert ocr_findings[0].match_score >= OCR_MATCH_THRESHOLD
         assert consts.OCR_MATCH_THRESHOLD == 85
-        assert OCR_MATCH_THRESHOLD == 85
 
     def test_ocr_check_absorbs_minor_ocr_variance(self, monkeypatch: pytest.MonkeyPatch) -> None:
         # Plausible OCR substitution (O -> 0) still scores above threshold.

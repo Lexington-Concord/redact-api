@@ -2183,7 +2183,7 @@ requires-dist = [
     { name = "fastapi-pagination", specifier = ">=0.12.31" },
     { name = "google-cloud-storage", marker = "extra == 'gcs'", specifier = ">=2.14.0" },
     { name = "httpx", specifier = ">=0.27.0" },
-    { name = "pillow", specifier = ">=10.0.0" },
+    { name = "pillow", specifier = ">=10.1.0" },
     { name = "prometheus-client", specifier = ">=0.21.0" },
     { name = "pydantic", extras = ["email"], specifier = ">=2.0.0" },
     { name = "pydantic-settings", specifier = ">=2.4.0" },
