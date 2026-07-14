@@ -66,11 +66,12 @@ class RejectItem(_DispositionItemBase):
 
 
 class EditItem(_DispositionItemBase):
-    """Edit an existing span's text and approve it."""
+    """Edit an existing span's text and/or bounding boxes, then approve it."""
 
     verb: Literal["edit"]
     span_id: UUID
     text: str
+    bboxes: list[BBox] | None = None
     reason: str | None = None
 
 
@@ -153,10 +154,17 @@ def disposition_needs_change(
 
     A change is needed when the target span has no disposition yet, when the desired
     action differs from the existing one, or -- for an edit -- when the text differs.
+    Bbox-only edit changes are checked separately by ``bboxes_differ`` (kept out of this
+    function's signature to stay within the project's max-argument lint limit).
     """
     if existing_action != desired_action:
         return True
     return bool(is_edit and current_text != new_text)
+
+
+def bboxes_differ(current_bboxes: list[Any], new_bboxes: list[BBox]) -> bool:
+    """Return whether ``new_bboxes`` differs from the span's persisted ``current_bboxes``."""
+    return [tuple(bbox) for bbox in current_bboxes] != list(new_bboxes)
 
 
 # ---------------------------------------------------------------------------
@@ -243,22 +251,32 @@ async def _apply_existing_span_disposition(
     desired_action = DISPOSITION_ACTION_BY_VERB[item.verb]
     is_edit = isinstance(item, EditItem)
     new_text = item.text if isinstance(item, EditItem) else None
+    new_bboxes = item.bboxes if isinstance(item, EditItem) else None
 
     existing = (
         await session.execute(select(Disposition).where(col(Disposition.span_id) == span.id))
     ).scalar_one_or_none()
 
-    if not disposition_needs_change(
+    needs_change = disposition_needs_change(
         existing.action if existing else None,
         desired_action,
         is_edit=is_edit,
         current_text=span.text,
         new_text=new_text,
-    ):
+    )
+    if new_bboxes is not None and bboxes_differ(span.bboxes, new_bboxes):
+        needs_change = True
+    if not needs_change:
         return False
 
     if isinstance(item, EditItem):
         span.text = item.text
+        if item.bboxes is not None:
+            span.bboxes = [list(bbox) for bbox in item.bboxes]
+        # Why: edit mutates the persisted span in place (rather than versioning it) because
+        # this ticket's scope has no span-history/manifest feature (#9); the audit chain
+        # (AuditEntry, appended below) preserves the pre-edit content via its digest, so
+        # nothing is lost even though the row itself is overwritten.
         session.add(span)
         await session.flush()  # type: ignore[attr-defined]
 
