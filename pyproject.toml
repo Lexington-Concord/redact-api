@@ -88,6 +88,9 @@ max-complexity = 10
 "redact_api/tests/**" = ["S", "PT009", "PLR2004", "ARG002", "TRY002"]
 # PLC0415 allows late imports for optional dependencies (azure, aws, gcs)
 "redact_api/core/storage.py" = ["PLC0415"]
+# S105 false positive: the VerifyVerdict.PASS enum member (value "pass") is a
+# verdict, not a hardcoded password. Renaming would break the R3 public contract.
+"redact_api/redaction/models.py" = ["S105"]
 
 [tool.ruff.format]
 quote-style = "double"
@@ -114,9 +117,9 @@ ignore_missing_imports = true
 module = ["google.*"]
 ignore_missing_imports = true
 
-# PyMuPDF (fitz) and pytesseract ship no type stubs / py.typed marker
+# PyMuPDF (imported as fitz) and pytesseract ship no type stubs / py.typed marker
 [[tool.mypy.overrides]]
-module = ["fitz.*", "fitz", "pymupdf.*", "pymupdf", "pytesseract.*", "pytesseract"]
+module = ["fitz", "pytesseract"]
 ignore_missing_imports = true
 
 [tool.coverage.run]

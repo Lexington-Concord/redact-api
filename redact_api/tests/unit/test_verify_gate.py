@@ -21,6 +21,7 @@ from collections.abc import Callable
 import fitz
 import pytest
 
+from redact_api.redaction import consts
 from redact_api.redaction.consts import OCR_MATCH_THRESHOLD
 from redact_api.redaction.models import (
     CheckSummary,
@@ -31,6 +32,7 @@ from redact_api.redaction.models import (
 )
 from redact_api.redaction.verify_gate import (
     _check_text_layer,
+    _first_bbox,
     normalize_text,
     verify,
 )
@@ -97,6 +99,16 @@ class TestTextLayerCheck:
         assert result.verdict == VerifyVerdict.FAIL
         assert _findings_of(result, CheckType.TEXT_LAYER)
 
+    def test_first_bbox_returns_none_when_span_not_locatable(self) -> None:
+        # When the phrase cannot be located on the page, the bbox is not derivable and
+        # the finding carries None (the "absent otherwise" branch of _first_bbox).
+        doc = fitz.open()
+        page = doc.new_page()  # blank page, no text to locate
+        try:
+            assert _first_bbox(page, DEFAULT_REDACTED_STRING) is None
+        finally:
+            doc.close()
+
     def test_text_layer_check_is_exact_not_fuzzy(self) -> None:
         # A near-miss must NOT trigger the (exact) text-layer check.
         result = verify(make_overlay_only_pdf("John Smith"), ["John Smyth"])
@@ -118,8 +130,6 @@ class TestOCRCheck:
 
     def test_ocr_check_uses_rapidfuzz_partial_ratio_and_named_threshold(self) -> None:
         # The threshold is a single named, auditable constant in the consts module.
-        from redact_api.redaction import consts
-
         assert consts.OCR_MATCH_THRESHOLD == 85
         assert OCR_MATCH_THRESHOLD == 85
 
@@ -231,7 +241,7 @@ class TestEdgeCases:
         assert result.findings == []
         # Checks still ran as no-ops rather than being skipped: every summary reports
         # the page it ranged over, not an early return.
-        assert len(result.checks) == 3  # noqa: PLR2004
+        assert len(result.checks) == 3
         for summary in result.checks:
             assert summary.pages_checked == 1
 
