@@ -193,6 +193,35 @@ class Settings(BaseSettings):
         description="Google Cloud project ID",
     )
 
+    # MinIO / S3-compatible pipeline storage (redaction artifacts + original/redacted PDFs).
+    # Distinct from storage_provider/storage_local_path above, which govern the unrelated
+    # document-upload path in api/documents.py and are not reused here.
+    minio_endpoint: str = Field(
+        default="localhost:9000",
+        alias="MINIO_ENDPOINT",
+        description="MinIO/S3 endpoint host:port for redaction-pipeline object storage",
+    )
+    minio_access_key: str = Field(
+        default="minioadmin",
+        alias="MINIO_ACCESS_KEY",
+        description="Access key for the redaction-pipeline object store",
+    )
+    minio_secret_key: str = Field(
+        default="minioadmin",
+        alias="MINIO_SECRET_KEY",
+        description="Secret key for the redaction-pipeline object store",
+    )
+    minio_bucket: str = Field(
+        default="redact-pipeline",
+        alias="MINIO_BUCKET",
+        description="Bucket holding redaction-pipeline artifacts and original/redacted PDFs",
+    )
+    minio_secure: bool = Field(
+        default=False,
+        alias="MINIO_SECURE",
+        description="Use HTTPS when connecting to the MinIO/S3 endpoint",
+    )
+
     @field_validator("jwt_algorithm")
     @classmethod
     def validate_jwt_algorithm(cls, value: str) -> str:
