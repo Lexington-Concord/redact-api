@@ -244,6 +244,45 @@ class TestRedactionCascade:
         with pytest.raises(IntegrityError):
             await session.flush()  # type: ignore[attr-defined]
 
+    @pytest.mark.asyncio
+    async def test_delete_span_referenced_by_audit_entry_restricts(  # noqa: PLR0913 - pytest fixture params can't be restructured
+        self,
+        session: AsyncSession,
+        make_organization: MakeOrganization,
+        make_user: MakeUser,
+        make_document: MakeDocument,
+        make_page: MakePage,
+        make_span: MakeSpan,
+    ) -> None:
+        """Deleting a Span referenced by AuditEntry.span_id raises IntegrityError."""
+        org = await make_organization()
+        user = await make_user()
+        document = await make_document(org.id)
+        page = await make_page(document.id)
+        span = await make_span(page.id)
+        job = RedactionJob(document_id=document.id, organization_id=org.id)
+        session.add(job)
+        await session.flush()  # type: ignore[attr-defined]
+        session.add(
+            AuditEntry(
+                job_id=job.id,
+                span_id=span.id,
+                reviewer_id=user.id,
+                organization_id=org.id,
+                action=AuditAction.APPROVED,
+                category="PERSON",
+                text_hash=HASH_A,
+                entry_hash=HASH_A,
+                prev_hash=GENESIS,
+                sequence=1,
+            )
+        )
+        await session.commit()
+
+        await session.delete(span)
+        with pytest.raises(IntegrityError):
+            await session.flush()  # type: ignore[attr-defined]
+
 
 class TestRedactionTenantScoping:
     """Single-table tenant scoping via denormalized organization_id (resolution #3)."""

@@ -153,6 +153,9 @@ async def append_audit_entry(
 
     prev_hash, sequence = await _next_chain_link(session, job_id)
     text_hash = _hash_hex(normalize_text(event.text))
+    # Why: every other TimestampedTable column relies on the DB's server_default=now()
+    # for created_at, but here the exact persisted value must also be hashed into the
+    # payload below -- so it's generated in Python and passed through explicitly instead.
     created_at = datetime.now(UTC)
     # Pinned 6-key payload (resolution #6) -- do not add or remove keys. text_hash is
     # stored on the row but deliberately excluded from the hashed payload.

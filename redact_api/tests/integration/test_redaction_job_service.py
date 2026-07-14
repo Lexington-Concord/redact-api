@@ -126,6 +126,20 @@ class TestTransitionJobStatus:
         with pytest.raises(InvalidStateTransitionError):
             await transition_job_status(session, job, JobStatus.INGESTED)
 
+    @pytest.mark.asyncio
+    async def test_exported_is_terminal(
+        self,
+        session: AsyncSession,
+        make_org_user: MakeOrgUser,
+        make_job: MakeJob,
+    ) -> None:
+        """EXPORTED has an empty transition set (no re-export/retry edge)."""
+        assert VALID_TRANSITIONS[JobStatus.EXPORTED] == frozenset()
+        org, _ = await make_org_user()
+        job = await make_job(org, status=JobStatus.EXPORTED)
+        with pytest.raises(InvalidStateTransitionError):
+            await transition_job_status(session, job, JobStatus.FAILED)
+
 
 class TestUndispositionedGate:
     """The APPLYING gate requires every span to be dispositioned (resolution #9)."""

@@ -69,8 +69,16 @@ class RedactionJob(TimestampedTable, RedactionJobBase, table=True):
     __table_args__ = (sa.Index("ix_redaction_job_organization_id", "organization_id"),)
 
 
-class RedactionJobCreate(RedactionJobBase):
-    """Schema for creating a redaction job."""
+class RedactionJobCreate(SQLModel):
+    """Schema for creating a redaction job.
+
+    Deliberately does not inherit ``RedactionJobBase``: ``status`` is server-controlled
+    (always starts at ``UPLOADED`` and only moves via ``transition_job_status``), so it
+    must not be a client-settable field on this schema.
+    """
+
+    document_id: UUID
+    organization_id: UUID
 
 
 class RedactionJobRead(RedactionJobBase):
