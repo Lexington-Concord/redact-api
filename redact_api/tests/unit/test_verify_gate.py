@@ -236,9 +236,9 @@ class TestFindingsCarryNoRawPII:
             assert finding.redacted_string_digest == expected
 
     def test_finding_bbox_present_when_available_absent_otherwise(self) -> None:
-        text_finding = _findings_of(
-            verify(make_overlay_only_pdf(), [DEFAULT_REDACTED_STRING]), CheckType.TEXT_LAYER
-        )[0]
+        text_finding = _findings_of(verify(make_overlay_only_pdf(), [DEFAULT_REDACTED_STRING]), CheckType.TEXT_LAYER)[
+            0
+        ]
         metadata_finding = _findings_of(
             verify(make_metadata_leak_pdf(), [DEFAULT_REDACTED_STRING]), CheckType.METADATA
         )[0]

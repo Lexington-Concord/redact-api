@@ -87,9 +87,7 @@ def _first_bbox(page: fitz.Page, raw: str) -> tuple[float, float, float, float] 
     return (float(rect.x0), float(rect.y0), float(rect.x1), float(rect.y1))
 
 
-def _check_text_layer(
-    doc: fitz.Document, redacted_strings: list[str]
-) -> tuple[CheckSummary, list[VerifyFinding]]:
+def _check_text_layer(doc: fitz.Document, redacted_strings: list[str]) -> tuple[CheckSummary, list[VerifyFinding]]:
     """Check 1: exact substring match against each page's normalized text layer."""
     targets = _normalized_targets(redacted_strings)
     findings: list[VerifyFinding] = []
@@ -146,9 +144,7 @@ def _check_ocr(doc: fitz.Document, redacted_strings: list[str]) -> tuple[CheckSu
     return summary, findings
 
 
-def _check_metadata(
-    doc: fitz.Document, redacted_strings: list[str]
-) -> tuple[CheckSummary, list[VerifyFinding]]:
+def _check_metadata(doc: fitz.Document, redacted_strings: list[str]) -> tuple[CheckSummary, list[VerifyFinding]]:
     """Check 3: exact substring match against docinfo and XMP metadata."""
     targets = _normalized_targets(redacted_strings)
     findings: list[VerifyFinding] = []
