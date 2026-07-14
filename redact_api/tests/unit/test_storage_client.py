@@ -129,7 +129,23 @@ class TestUploadFile:
         result = await storage_client.upload_file("documents/doc-1/page-1.png", local_file)
 
         assert result == "documents/doc-1/page-1.png"
-        mock_s3_client.upload_file.assert_awaited_once_with(str(local_file), BUCKET, "documents/doc-1/page-1.png")
+        mock_s3_client.upload_file.assert_awaited_once_with(
+            str(local_file), BUCKET, "documents/doc-1/page-1.png", ExtraArgs={}
+        )
+
+    @pytest.mark.anyio
+    async def test_uploads_with_content_type(
+        self, storage_client: StorageClient, mock_s3_client: AsyncMock, tmp_path: Path
+    ) -> None:
+        local_file = tmp_path / "test.png"
+        local_file.write_bytes(b"fake-png-bytes")
+        mock_s3_client.upload_file = AsyncMock()
+
+        await storage_client.upload_file("documents/doc-1/page-1.png", local_file, content_type="image/png")
+
+        mock_s3_client.upload_file.assert_awaited_once_with(
+            str(local_file), BUCKET, "documents/doc-1/page-1.png", ExtraArgs={"ContentType": "image/png"}
+        )
 
 
 class TestUploadBytes:
@@ -143,6 +159,17 @@ class TestUploadBytes:
         assert result == "documents/doc-1/page-1.json"
         mock_s3_client.put_object.assert_awaited_once_with(
             Bucket=BUCKET, Key="documents/doc-1/page-1.json", Body=payload
+        )
+
+    @pytest.mark.anyio
+    async def test_uploads_with_content_type(self, storage_client: StorageClient, mock_s3_client: AsyncMock) -> None:
+        mock_s3_client.put_object = AsyncMock()
+        payload = b"\x89PNG\r\n\x1a\n"
+
+        await storage_client.upload_bytes("documents/doc-1/page-1.png", payload, content_type="image/png")
+
+        mock_s3_client.put_object.assert_awaited_once_with(
+            Bucket=BUCKET, Key="documents/doc-1/page-1.png", Body=payload, ContentType="image/png"
         )
 
 

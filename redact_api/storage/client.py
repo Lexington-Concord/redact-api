@@ -22,10 +22,16 @@ Usage:
 from __future__ import annotations
 
 import logging
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import aioboto3
 from botocore.exceptions import ClientError
+
+if TYPE_CHECKING:
+    from types_aiobotocore_s3.client import S3Client
 
 LOGGER = logging.getLogger(__name__)
 
@@ -49,14 +55,20 @@ class StorageClient:
         self._bucket = bucket
         self._session = aioboto3.Session()
 
-    async def ensure_bucket(self) -> None:
-        """Create the pipeline bucket if it doesn't exist."""
+    @asynccontextmanager
+    async def _client(self) -> AsyncIterator[S3Client]:
+        """Open one S3 client for the duration of a single operation."""
         async with self._session.client(
             "s3",
             endpoint_url=self._endpoint_url,
             aws_access_key_id=self._access_key,
             aws_secret_access_key=self._secret_key,
         ) as s3:
+            yield s3
+
+    async def ensure_bucket(self) -> None:
+        """Create the pipeline bucket if it doesn't exist."""
+        async with self._client() as s3:
             try:
                 await s3.head_bucket(Bucket=self._bucket)
             except ClientError as e:
@@ -67,46 +79,42 @@ class StorageClient:
                 else:
                     raise
 
-    async def upload_file(self, object_key: str, file_path: Path) -> str:
+    async def upload_file(self, object_key: str, file_path: Path, *, content_type: str | None = None) -> str:
         """Upload a local file to MinIO.
 
         Args:
             object_key: S3 object key (e.g., "documents/123/pages/1/raster.png")
             file_path: Local file path to upload
+            content_type: Optional MIME type to set on the uploaded object.
 
         Returns:
             The object key that was uploaded
         """
-        async with self._session.client(
-            "s3",
-            endpoint_url=self._endpoint_url,
-            aws_access_key_id=self._access_key,
-            aws_secret_access_key=self._secret_key,
-        ) as s3:
-            await s3.upload_file(str(file_path), self._bucket, object_key)
+        extra_args = {"ContentType": content_type} if content_type else {}
+        async with self._client() as s3:
+            await s3.upload_file(str(file_path), self._bucket, object_key, ExtraArgs=extra_args)
             LOGGER.info(
                 "file_uploaded",
                 extra={"bucket": self._bucket, "key": object_key, "size_bytes": file_path.stat().st_size},
             )
         return object_key
 
-    async def upload_bytes(self, object_key: str, data: bytes) -> str:
+    async def upload_bytes(self, object_key: str, data: bytes, *, content_type: str | None = None) -> str:
         """Upload raw bytes to MinIO.
 
         Args:
             object_key: S3 object key
             data: Bytes to upload
+            content_type: Optional MIME type to set on the uploaded object.
 
         Returns:
             The object key that was uploaded
         """
-        async with self._session.client(
-            "s3",
-            endpoint_url=self._endpoint_url,
-            aws_access_key_id=self._access_key,
-            aws_secret_access_key=self._secret_key,
-        ) as s3:
-            await s3.put_object(Bucket=self._bucket, Key=object_key, Body=data)
+        async with self._client() as s3:
+            if content_type is not None:
+                await s3.put_object(Bucket=self._bucket, Key=object_key, Body=data, ContentType=content_type)
+            else:
+                await s3.put_object(Bucket=self._bucket, Key=object_key, Body=data)
             LOGGER.info(
                 "bytes_uploaded",
                 extra={"bucket": self._bucket, "key": object_key, "size_bytes": len(data)},
@@ -124,12 +132,7 @@ class StorageClient:
             The local file path
         """
         file_path.parent.mkdir(parents=True, exist_ok=True)
-        async with self._session.client(
-            "s3",
-            endpoint_url=self._endpoint_url,
-            aws_access_key_id=self._access_key,
-            aws_secret_access_key=self._secret_key,
-        ) as s3:
+        async with self._client() as s3:
             await s3.download_file(self._bucket, object_key, str(file_path))
             LOGGER.info(
                 "file_downloaded",
@@ -146,12 +149,7 @@ class StorageClient:
         Returns:
             The object data as bytes
         """
-        async with self._session.client(
-            "s3",
-            endpoint_url=self._endpoint_url,
-            aws_access_key_id=self._access_key,
-            aws_secret_access_key=self._secret_key,
-        ) as s3:
+        async with self._client() as s3:
             response = await s3.get_object(Bucket=self._bucket, Key=object_key)
             data: bytes = await response["Body"].read()
             LOGGER.info(
