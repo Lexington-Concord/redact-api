@@ -19,7 +19,8 @@ dependencies = [
   "python-multipart>=0.0.9",
   "slowapi>=0.1.9",
   "tenacity>=9.0.0",
-  "pymupdf>=1.24.0",
+  "pymupdf>=1.28.0",
+  "aioboto3>=13.0.0",
   "pytesseract>=0.3.10",
   "pillow>=10.1.0",
   "rapidfuzz>=3.9.0",
@@ -119,7 +120,7 @@ ignore_missing_imports = true
 
 # PyMuPDF (imported as fitz) and pytesseract ship no type stubs / py.typed marker
 [[tool.mypy.overrides]]
-module = ["fitz", "pytesseract"]
+module = ["fitz", "fitz.*", "pytesseract"]
 ignore_missing_imports = true
 
 [tool.coverage.run]

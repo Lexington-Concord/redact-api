@@ -62,3 +62,40 @@ class VerifyResult(BaseModel):
     verdict: VerifyVerdict
     checks: list[CheckSummary]
     findings: list[VerifyFinding]
+
+
+class ApprovedSpan(BaseModel):
+    """A single already-approved, already-projected redaction span for ``apply`` (R1).
+
+    Supplied by the caller -- ``apply`` is a pure, DB-free function that never derives
+    spans from persistence itself (that projection is redact-api#7's job). ``page_number``
+    is 1-based, matching the page numbering used throughout the redaction pipeline
+    (e.g. ``VerifyFinding.page_number``). ``bboxes`` is a list of ``(x0, y0, x1, y1)`` in
+    PDF-point units with a top-left origin, the same shape as ``ingest.models.WordBBox.bbox``
+    -- a list because one logical span (e.g. text wrapping across lines) can cover more
+    than one bbox on the same page. ``text`` is the recoverable string being burned in;
+    ``apply`` forwards it to the verify gate so the gate can confirm the string is no
+    longer recoverable from its own output.
+    """
+
+    page_number: int
+    bboxes: list[tuple[float, float, float, float]]
+    text: str
+
+
+class ApplyResult(BaseModel):
+    """Result of ``apply``: the redacted PDF plus the verify gate's verdict on it (R2).
+
+    ``apply`` runs the verify gate on its *own* output before returning, so a caller
+    can never obtain redacted bytes that were not gated. A ``FAIL`` verdict is a normal
+    return value (surfaced via ``verify_result``), not a raised exception -- the caller
+    decides how to react. ``passed`` is a convenience mirror of the gate verdict.
+    """
+
+    pdf_bytes: bytes
+    verify_result: VerifyResult
+
+    @property
+    def passed(self) -> bool:
+        """True when the verify gate passed on the redacted output (R2)."""
+        return self.verify_result.verdict == VerifyVerdict.PASS
