@@ -47,12 +47,7 @@ async def ingest_pdf(document_id: UUID, pdf_bytes: bytes, storage: StorageClient
     LOGGER.info("ingest_started", extra={**context, "document_id": str(document_id)})
 
     try:
-        if len(pdf_bytes) > settings.max_file_size_bytes:
-            raise DocumentTooLargeError(
-                limit_kind="file_size",
-                actual=len(pdf_bytes),
-                limit=settings.max_file_size_bytes,
-            )
+        _validate_file_size(pdf_bytes)
         extractions = pdf.extract_pages(pdf_bytes)
     except DocumentTooLargeError as error:
         LOGGER.warning(
@@ -88,6 +83,16 @@ async def ingest_pdf(document_id: UUID, pdf_bytes: bytes, storage: StorageClient
         extra={**context, "document_id": str(document_id), "page_count": result.page_count},
     )
     return result
+
+
+def _validate_file_size(pdf_bytes: bytes) -> None:
+    """Reject before any parsing if the raw upload exceeds the configured limit."""
+    if len(pdf_bytes) > settings.max_file_size_bytes:
+        raise DocumentTooLargeError(
+            limit_kind="file_size",
+            actual=len(pdf_bytes),
+            limit=settings.max_file_size_bytes,
+        )
 
 
 async def _upload_page(document_id: UUID, extraction: PageExtraction, storage: StorageClient) -> PageModel:

@@ -8,11 +8,12 @@ with upload_bytes overridden to record in memory instead of hitting MinIO).
 from __future__ import annotations
 
 import json
-import logging
+from unittest.mock import patch
 from uuid import UUID, uuid4
 
 import pytest
 
+from redact_api.core.metrics import documents_ingested_total
 from redact_api.ingest import service
 from redact_api.ingest.exceptions import (
     DocumentTooLargeError,
@@ -40,7 +41,7 @@ class FakeStorageClient(StorageClient):
     """In-memory StorageClient double: records uploads instead of hitting MinIO."""
 
     def __init__(self) -> None:
-        super().__init__(bucket="fake-bucket")
+        super().__init__(access_key="fake-access", secret_key="fake-secret", bucket="fake-bucket")
         self.uploads: dict[str, bytes] = {}
 
     async def upload_bytes(self, object_key: str, data: bytes) -> str:
@@ -106,17 +107,15 @@ class TestIngestPdfHappyPath:
     async def test_increments_documents_ingested_counter(
         self, fake_storage: FakeStorageClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from redact_api.core.metrics import documents_ingested_total
-
         environment = _unique_environment("counter")
         monkeypatch.setattr(service.settings, "environment", environment)
         counter = documents_ingested_total.labels(environment=environment)
-        before = counter._value.get()  # noqa: SLF001
+        before = counter._value.get()
 
         pdf_bytes = build_multi_page_pdf(page_count=1)
         await ingest_pdf(DOCUMENT_ID, pdf_bytes, fake_storage)
 
-        after = counter._value.get()  # noqa: SLF001
+        after = counter._value.get()
         assert after == before + 1
 
 
@@ -194,42 +193,41 @@ class TestIngestPdfNonAsciiRoundTrip:
 
 
 class TestIngestPdfLogging:
+    """Assert on redact_api.ingest.service.LOGGER directly (patched), matching the
+    mock-the-module-LOGGER idiom used in redact_api/tests/unit/test_logging.py --
+    more robust than caplog, which is sensitive to logger/handler state set up
+    elsewhere in the full test suite (app lifespan, other modules' logging config).
+    """
+
     @pytest.mark.anyio
-    async def test_logs_started_and_completed_on_success(
-        self, fake_storage: FakeStorageClient, caplog: pytest.LogCaptureFixture
-    ) -> None:
-        caplog.set_level(logging.INFO, logger="redact_api.ingest.service")
+    async def test_logs_started_and_completed_on_success(self, fake_storage: FakeStorageClient) -> None:
         pdf_bytes = build_multi_page_pdf(page_count=2)
 
-        await ingest_pdf(DOCUMENT_ID, pdf_bytes, fake_storage)
-
-        started = [r for r in caplog.records if r.message == "ingest_started"]
-        completed = [r for r in caplog.records if r.message == "ingest_completed"]
-        assert len(started) == 1
-        assert len(completed) == 1
-        assert completed[0].page_count == 2  # type: ignore[attr-defined]
-
-    @pytest.mark.anyio
-    async def test_logs_rejected_at_warning_with_error_type(
-        self, fake_storage: FakeStorageClient, caplog: pytest.LogCaptureFixture
-    ) -> None:
-        caplog.set_level(logging.INFO, logger="redact_api.ingest.service")
-        pdf_bytes = build_encrypted_pdf()
-
-        with pytest.raises(EncryptedPdfError):
+        with patch("redact_api.ingest.service.LOGGER") as mock_logger:
             await ingest_pdf(DOCUMENT_ID, pdf_bytes, fake_storage)
 
-        rejected = [r for r in caplog.records if r.message == "ingest_rejected"]
-        assert len(rejected) == 1
-        assert rejected[0].levelno == logging.WARNING
-        assert rejected[0].error_type == "EncryptedPdfError"  # type: ignore[attr-defined]
+        started = [c for c in mock_logger.info.call_args_list if c.args[0] == "ingest_started"]
+        completed = [c for c in mock_logger.info.call_args_list if c.args[0] == "ingest_completed"]
+        assert len(started) == 1
+        assert len(completed) == 1
+        assert completed[0].kwargs["extra"]["page_count"] == 2
+
+    @pytest.mark.anyio
+    async def test_logs_rejected_at_warning_with_error_type(self, fake_storage: FakeStorageClient) -> None:
+        pdf_bytes = build_encrypted_pdf()
+
+        with patch("redact_api.ingest.service.LOGGER") as mock_logger, pytest.raises(EncryptedPdfError):
+            await ingest_pdf(DOCUMENT_ID, pdf_bytes, fake_storage)
+
+        mock_logger.warning.assert_called_once()
+        call = mock_logger.warning.call_args
+        assert call.args[0] == "ingest_rejected"
+        assert call.kwargs["extra"]["error_type"] == "EncryptedPdfError"
 
     @pytest.mark.anyio
     async def test_logs_rejected_for_each_typed_rejection(
-        self, fake_storage: FakeStorageClient, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+        self, fake_storage: FakeStorageClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        caplog.set_level(logging.INFO, logger="redact_api.ingest.service")
-
         cases: list[tuple[bytes, str]] = [
             (build_encrypted_pdf(), "EncryptedPdfError"),
             (build_malformed_pdf(), "MalformedPdfError"),
@@ -237,17 +235,16 @@ class TestIngestPdfLogging:
         ]
 
         for pdf_bytes, expected_error_type in cases:
-            caplog.clear()
-            with pytest.raises((EncryptedPdfError, MalformedPdfError, UnsupportedPageError)):
+            with (
+                patch("redact_api.ingest.service.LOGGER") as mock_logger,
+                pytest.raises((EncryptedPdfError, MalformedPdfError, UnsupportedPageError)),
+            ):
                 await ingest_pdf(uuid4(), pdf_bytes, fake_storage)
-            rejected = [r for r in caplog.records if r.message == "ingest_rejected"]
-            assert len(rejected) == 1
-            assert rejected[0].error_type == expected_error_type  # type: ignore[attr-defined]
+            mock_logger.warning.assert_called_once()
+            assert mock_logger.warning.call_args.kwargs["extra"]["error_type"] == expected_error_type
 
-        caplog.clear()
         monkeypatch.setattr(service.settings, "max_file_size_bytes", 10)
-        with pytest.raises(DocumentTooLargeError):
+        with patch("redact_api.ingest.service.LOGGER") as mock_logger, pytest.raises(DocumentTooLargeError):
             await ingest_pdf(uuid4(), build_multi_page_pdf(page_count=1), fake_storage)
-        rejected = [r for r in caplog.records if r.message == "ingest_rejected"]
-        assert len(rejected) == 1
-        assert rejected[0].error_type == "DocumentTooLargeError"  # type: ignore[attr-defined]
+        mock_logger.warning.assert_called_once()
+        assert mock_logger.warning.call_args.kwargs["extra"]["error_type"] == "DocumentTooLargeError"

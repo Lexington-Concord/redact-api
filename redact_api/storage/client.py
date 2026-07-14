@@ -37,8 +37,8 @@ class StorageClient:
         self,
         *,
         endpoint: str = "localhost:9000",
-        access_key: str = "minioadmin",
-        secret_key: str = "minioadmin",
+        access_key: str,
+        secret_key: str,
         bucket: str = "redact-pipeline",
         secure: bool = False,
     ) -> None:

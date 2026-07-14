@@ -26,7 +26,10 @@ from redact_api.tests.fixtures.ingest_pdfs import (
 PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 
 
-def _ground_truth_words(pdf_bytes: bytes, page_index: int) -> list[tuple[float, float, float, float, str, int, int, int]]:
+_RawWord = tuple[float, float, float, float, str, int, int, int]
+
+
+def _ground_truth_words(pdf_bytes: bytes, page_index: int) -> list[_RawWord]:
     """Independently derive the expected word list via a direct fitz call.
 
     Deliberately bypasses redact_api.ingest.pdf so the test doesn't just

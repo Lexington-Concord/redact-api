@@ -62,7 +62,7 @@ class TestStorageClientConstruction:
                 bucket="secure-bucket",
                 secure=True,
             )
-        assert client._endpoint_url == "https://minio.example.com"  # noqa: SLF001
+        assert client._endpoint_url == "https://minio.example.com"
 
     def test_insecure_flag_selects_http(self) -> None:
         with patch("redact_api.storage.client.aioboto3.Session", return_value=_mock_session(_mock_s3_client())):
@@ -73,7 +73,7 @@ class TestStorageClientConstruction:
                 bucket="insecure-bucket",
                 secure=False,
             )
-        assert client._endpoint_url == "http://minio.example.com"  # noqa: SLF001
+        assert client._endpoint_url == "http://minio.example.com"
 
 
 class TestEnsureBucket:
@@ -89,8 +89,7 @@ class TestEnsureBucket:
 
     @pytest.mark.anyio
     async def test_bucket_missing_creates_it(self, storage_client: StorageClient, mock_s3_client: AsyncMock) -> None:
-        error_response = {"Error": {"Code": "404"}}
-        mock_s3_client.head_bucket = AsyncMock(side_effect=ClientError(error_response, "HeadBucket"))
+        mock_s3_client.head_bucket = AsyncMock(side_effect=ClientError({"Error": {"Code": "404"}}, "HeadBucket"))
         mock_s3_client.create_bucket = AsyncMock(return_value={})
 
         await storage_client.ensure_bucket()
@@ -101,8 +100,9 @@ class TestEnsureBucket:
     async def test_no_such_bucket_code_also_creates_it(
         self, storage_client: StorageClient, mock_s3_client: AsyncMock
     ) -> None:
-        error_response = {"Error": {"Code": "NoSuchBucket"}}
-        mock_s3_client.head_bucket = AsyncMock(side_effect=ClientError(error_response, "HeadBucket"))
+        mock_s3_client.head_bucket = AsyncMock(
+            side_effect=ClientError({"Error": {"Code": "NoSuchBucket"}}, "HeadBucket")
+        )
         mock_s3_client.create_bucket = AsyncMock(return_value={})
 
         await storage_client.ensure_bucket()
@@ -111,8 +111,7 @@ class TestEnsureBucket:
 
     @pytest.mark.anyio
     async def test_other_client_error_reraised(self, storage_client: StorageClient, mock_s3_client: AsyncMock) -> None:
-        error_response = {"Error": {"Code": "403"}}
-        mock_s3_client.head_bucket = AsyncMock(side_effect=ClientError(error_response, "HeadBucket"))
+        mock_s3_client.head_bucket = AsyncMock(side_effect=ClientError({"Error": {"Code": "403"}}, "HeadBucket"))
 
         with pytest.raises(ClientError):
             await storage_client.ensure_bucket()
