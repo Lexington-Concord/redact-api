@@ -25,6 +25,7 @@ from redact_api.models.user import User
 from redact_api.services.redaction_job_service import (
     GENESIS_PREV_HASH,
     VALID_TRANSITIONS,
+    AuditEntryInput,
     InvalidStateTransitionError,
     UndispositionedSpansError,
     append_audit_entry,
@@ -178,11 +179,8 @@ class TestAuditHashChain:
         job = await _make_job(session, org)
         entry = await append_audit_entry(
             session,
-            job_id=job.id,
-            action=AuditAction.APPROVED,
-            category="PERSON",
-            text="John Doe",
-            reviewer_id=user.id,
+            job.id,
+            AuditEntryInput(action=AuditAction.APPROVED, category="PERSON", text="John Doe", reviewer_id=user.id),
         )
         assert entry.prev_hash == GENESIS_PREV_HASH
         assert GENESIS_PREV_HASH == "0" * 64
@@ -194,19 +192,13 @@ class TestAuditHashChain:
         job = await _make_job(session, org)
         first = await append_audit_entry(
             session,
-            job_id=job.id,
-            action=AuditAction.APPROVED,
-            category="PERSON",
-            text="John Doe",
-            reviewer_id=user.id,
+            job.id,
+            AuditEntryInput(action=AuditAction.APPROVED, category="PERSON", text="John Doe", reviewer_id=user.id),
         )
         second = await append_audit_entry(
             session,
-            job_id=job.id,
-            action=AuditAction.REJECTED,
-            category="EMAIL",
-            text="a@b.com",
-            reviewer_id=user.id,
+            job.id,
+            AuditEntryInput(action=AuditAction.REJECTED, category="EMAIL", text="a@b.com", reviewer_id=user.id),
         )
         assert second.prev_hash == first.entry_hash
         assert second.sequence > first.sequence
@@ -219,12 +211,14 @@ class TestAuditHashChain:
         span = await _add_span(session, job)
         entry = await append_audit_entry(
             session,
-            job_id=job.id,
-            action=AuditAction.APPROVED,
-            category="PERSON",
-            text="John Doe",
-            reviewer_id=user.id,
-            span_id=span.id,
+            job.id,
+            AuditEntryInput(
+                action=AuditAction.APPROVED,
+                category="PERSON",
+                text="John Doe",
+                reviewer_id=user.id,
+                span_id=span.id,
+            ),
         )
         assert entry.entry_hash == _expected_entry_hash(entry)
 
@@ -236,11 +230,8 @@ class TestAuditHashChain:
         raw = "John Doe"
         entry = await append_audit_entry(
             session,
-            job_id=job.id,
-            action=AuditAction.APPROVED,
-            category="PERSON",
-            text=raw,
-            reviewer_id=user.id,
+            job.id,
+            AuditEntryInput(action=AuditAction.APPROVED, category="PERSON", text=raw, reviewer_id=user.id),
         )
         assert "text" not in type(entry).model_fields
         assert entry.category == "PERSON"
@@ -256,19 +247,13 @@ class TestAuditHashChain:
         job_b = await _make_job(session, org)
         entry_a = await append_audit_entry(
             session,
-            job_id=job_a.id,
-            action=AuditAction.APPROVED,
-            category="PERSON",
-            text="John   Doe",
-            reviewer_id=user.id,
+            job_a.id,
+            AuditEntryInput(action=AuditAction.APPROVED, category="PERSON", text="John   Doe", reviewer_id=user.id),
         )
         entry_b = await append_audit_entry(
             session,
-            job_id=job_b.id,
-            action=AuditAction.APPROVED,
-            category="PERSON",
-            text="  john doe  ",
-            reviewer_id=user.id,
+            job_b.id,
+            AuditEntryInput(action=AuditAction.APPROVED, category="PERSON", text="  john doe  ", reviewer_id=user.id),
         )
         assert entry_a.text_hash == entry_b.text_hash
 
@@ -279,11 +264,8 @@ class TestAuditHashChain:
         job = await _make_job(session, org)
         entry = await append_audit_entry(
             session,
-            job_id=job.id,
-            action=AuditAction.APPROVED,
-            category="PERSON",
-            text="John Doe",
-            reviewer_id=user.id,
+            job.id,
+            AuditEntryInput(action=AuditAction.APPROVED, category="PERSON", text="John Doe", reviewer_id=user.id),
         )
         assert entry.organization_id == org.id
 
@@ -301,10 +283,7 @@ class TestAuditHashChain:
         for action in actions:
             entry = await append_audit_entry(
                 session,
-                job_id=job.id,
-                action=action,
-                category="PERSON",
-                text="John Doe",
-                reviewer_id=user.id,
+                job.id,
+                AuditEntryInput(action=action, category="PERSON", text="John Doe", reviewer_id=user.id),
             )
             assert entry.action == action
