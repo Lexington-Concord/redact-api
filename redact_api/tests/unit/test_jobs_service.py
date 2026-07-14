@@ -21,6 +21,8 @@ from redact_api.services.jobs_service import (
     AUDIT_ACTION_BY_VERB,
     DISPOSITION_ACTION_BY_VERB,
     DispositionBatchRequest,
+    EditItem,
+    bboxes_differ,
     build_approved_span,
     disposition_needs_change,
 )
@@ -105,6 +107,32 @@ class TestDispositionNeedsChange:
             )
             is True
         )
+
+
+class TestBboxesDiffer:
+    def test_identical_bboxes_no_diff(self) -> None:
+        assert bboxes_differ([[1.0, 2.0, 3.0, 4.0]], [(1.0, 2.0, 3.0, 4.0)]) is False
+
+    def test_different_bboxes_diff(self) -> None:
+        assert bboxes_differ([[1.0, 2.0, 3.0, 4.0]], [(5.0, 6.0, 7.0, 8.0)]) is True
+
+    def test_different_count_diff(self) -> None:
+        assert bboxes_differ([[1.0, 2.0, 3.0, 4.0]], [(1.0, 2.0, 3.0, 4.0), (5.0, 6.0, 7.0, 8.0)]) is True
+
+    def test_empty_vs_empty_no_diff(self) -> None:
+        assert bboxes_differ([], []) is False
+
+
+class TestEditItemSchema:
+    def test_bboxes_optional_defaults_to_none(self) -> None:
+        item = EditItem.model_validate({"verb": "edit", "span_id": uuid4(), "text": "corrected"})
+        assert item.bboxes is None
+
+    def test_accepts_bboxes(self) -> None:
+        item = EditItem.model_validate(
+            {"verb": "edit", "span_id": uuid4(), "text": "corrected", "bboxes": [[1.0, 2.0, 3.0, 4.0]]}
+        )
+        assert item.bboxes == [(1.0, 2.0, 3.0, 4.0)]
 
 
 class TestDispositionBatchRequestSchema:

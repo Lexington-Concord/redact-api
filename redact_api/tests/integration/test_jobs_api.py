@@ -292,6 +292,7 @@ class TestDispositions:
             json={"items": [{"verb": "approve", "span_id": str(span.id)}]},
         )
         assert second.json() == {"applied": 0, "skipped": 1, "spans_created": 0}
+        assert await _count(session_maker, Disposition, span_id=span.id) == 1
         assert await _count(session_maker, AuditEntry, job_id=job.id) == 1
 
     @pytest.mark.asyncio
@@ -411,7 +412,20 @@ class TestDispositions:
 
 class TestApply:
     @pytest.mark.asyncio
-    async def test_apply_zero_approved_spans_verifies(
+    async def test_apply_zero_spans_verifies(
+        self, client: AsyncClient, session: AsyncSession, fake_storage_client: FakeStorageClient
+    ) -> None:
+        job = await _seed_job(session)
+        await session.commit()
+        fake_storage_client.uploads[keys.original_pdf_key(job.document_id)] = build_multi_page_pdf(page_count=1)
+
+        response = await client.post(f"/jobs/{job.id}/apply")
+        assert response.status_code == HTTPStatus.OK
+        assert response.json()["status"] == JobStatus.VERIFIED.value
+        assert keys.redacted_pdf_key(job.id) in fake_storage_client.uploads
+
+    @pytest.mark.asyncio
+    async def test_apply_rejected_span_verifies(
         self, client: AsyncClient, session: AsyncSession, fake_storage_client: FakeStorageClient
     ) -> None:
         job = await _seed_job(session)
@@ -424,6 +438,47 @@ class TestApply:
         assert response.status_code == HTTPStatus.OK
         assert response.json()["status"] == JobStatus.VERIFIED.value
         assert keys.redacted_pdf_key(job.id) in fake_storage_client.uploads
+
+    @pytest.mark.asyncio
+    async def test_apply_only_projects_approved_spans(
+        self,
+        client: AsyncClient,
+        session: AsyncSession,
+        fake_storage_client: FakeStorageClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """R5 safety invariant: a REJECTED span must never reach ``apply()``'s burn set."""
+        job = await _seed_job(session)
+        approved_span = await _seed_span(session, job, page_number=1, text="approved-pii")
+        rejected_span = await _seed_span(session, job, page_number=2, text="rejected-pii")
+        await _seed_disposition(session, approved_span, DispositionAction.APPROVED)
+        await _seed_disposition(session, rejected_span, DispositionAction.REJECTED)
+        await session.commit()
+        fake_storage_client.uploads[keys.original_pdf_key(job.document_id)] = build_multi_page_pdf(page_count=1)
+
+        captured_spans: list[ApprovedSpan] = []
+
+        def _capturing_apply(_pdf_bytes: bytes, spans: list[ApprovedSpan]) -> ApplyResult:
+            captured_spans.extend(spans)
+            verify_result = VerifyResult(verdict=VerifyVerdict.PASS, checks=[], findings=[])
+            return ApplyResult(pdf_bytes=b"redacted", verify_result=verify_result)
+
+        monkeypatch.setattr("redact_api.api.jobs.apply", _capturing_apply)
+
+        response = await client.post(f"/jobs/{job.id}/apply")
+        assert response.status_code == HTTPStatus.OK
+        assert [span.text for span in captured_spans] == ["approved-pii"]
+
+    @pytest.mark.asyncio
+    async def test_apply_tenant_isolation_404(self, client: AsyncClient, session: AsyncSession) -> None:
+        other_org = Organization(name=f"Other {uuid4()}")
+        session.add(other_org)
+        await session.flush()  # type: ignore[attr-defined]
+        job = await _seed_job(session, organization_id=other_org.id)
+        await session.commit()
+
+        response = await client.post(f"/jobs/{job.id}/apply")
+        assert response.status_code == HTTPStatus.NOT_FOUND
 
     @pytest.mark.asyncio
     async def test_apply_undispositioned_spans_409(
@@ -543,7 +598,11 @@ class TestExport:
 
     @pytest.mark.asyncio
     async def test_export_idempotent_reread(
-        self, client: AsyncClient, session: AsyncSession, fake_storage_client: FakeStorageClient
+        self,
+        client: AsyncClient,
+        session: AsyncSession,
+        session_maker: SessionMaker,
+        fake_storage_client: FakeStorageClient,
     ) -> None:
         job = await self._seed_verified(session, fake_storage_client)
 
@@ -552,6 +611,10 @@ class TestExport:
         assert first.status_code == HTTPStatus.OK
         assert second.status_code == HTTPStatus.OK
         assert second.content == b"%PDF-redacted"
+
+        # No re-transition and no duplicate side effect on the second call.
+        refreshed = await _fetch_job(session_maker, job.id)
+        assert refreshed.status == JobStatus.EXPORTED
 
     @pytest.mark.asyncio
     async def test_export_before_verified_409(self, client: AsyncClient, session: AsyncSession) -> None:
@@ -570,3 +633,14 @@ class TestExport:
 
         response = await client.get(f"/jobs/{job.id}/export", headers=_member_headers(member.id))
         assert response.status_code == HTTPStatus.FORBIDDEN
+
+    @pytest.mark.asyncio
+    async def test_export_tenant_isolation_404(self, client: AsyncClient, session: AsyncSession) -> None:
+        other_org = Organization(name=f"Other {uuid4()}")
+        session.add(other_org)
+        await session.flush()  # type: ignore[attr-defined]
+        job = await _seed_job(session, organization_id=other_org.id, status=JobStatus.VERIFIED)
+        await session.commit()
+
+        response = await client.get(f"/jobs/{job.id}/export")
+        assert response.status_code == HTTPStatus.NOT_FOUND
