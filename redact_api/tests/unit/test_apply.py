@@ -82,8 +82,8 @@ def _is_white(pixel: tuple[int, int, int]) -> bool:
     return all(channel >= _WHITE_MIN for channel in pixel)
 
 
-def _output_image_exifs(pdf_bytes: bytes) -> list[dict[int, object]]:
-    """Return the EXIF dict of every image embedded in every output page."""
+def _image_exifs(pdf_bytes: bytes) -> list[dict[int, object]]:
+    """Return the EXIF dict of every image embedded in every page of ``pdf_bytes``."""
     exifs: list[dict[int, object]] = []
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     try:
@@ -194,6 +194,20 @@ class TestApplyBoxDrawing:
         image = _render_page(result.pdf_bytes)
         assert _is_black(_pixel_at_point(image, 1.0, 1.0))
 
+    def test_span_with_multiple_bboxes_blacks_out_every_region(self) -> None:
+        # R1: a single span's bboxes can cover more than one region (e.g. wrapped text).
+        # Regression guard for the exact defect the bboxes-plural fix addressed -- if
+        # _draw_boxes only painted the first bbox in the list, this test would catch it.
+        pdf_bytes, _ref = make_pii_source_pdf()
+        bbox_a = (10.0, 10.0, 50.0, 30.0)
+        bbox_b = (300.0, 160.0, 340.0, 180.0)
+        span = ApprovedSpan(page_number=1, bboxes=[bbox_a, bbox_b], text=DEFAULT_REDACTED_STRING)
+        result = apply(pdf_bytes, [span])
+        image = _render_page(result.pdf_bytes)
+        for x0, y0, x1, y1 in (bbox_a, bbox_b):
+            assert _is_black(_pixel_at_point(image, (x0 + x1) / 2, (y0 + y1) / 2))
+        assert _is_white(_pixel_at_point(image, 200.0, 150.0))
+
 
 class TestApplyMetadataStrip:
     """R5: explicit docinfo/XMP/embedded-file/JS strip, plus Amendment B structural regression."""
@@ -274,7 +288,7 @@ class TestApplyMetadataStrip:
             assert list(source_doc[0].annots()) != []
         finally:
             source_doc.close()
-        assert any(exif for exif in _output_image_exifs(source_bytes))
+        assert any(exif for exif in _image_exifs(source_bytes))
 
         result = apply(source_bytes, [])
         doc = fitz.open(stream=result.pdf_bytes, filetype="pdf")
@@ -283,7 +297,7 @@ class TestApplyMetadataStrip:
                 assert list(page.annots()) == []
         finally:
             doc.close()
-        for exif in _output_image_exifs(result.pdf_bytes):
+        for exif in _image_exifs(result.pdf_bytes):
             assert exif == {}
 
 
