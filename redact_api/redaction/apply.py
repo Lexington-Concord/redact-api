@@ -30,6 +30,10 @@ from redact_api.redaction.verify_gate import verify
 _BLACK = (0, 0, 0)
 _POINTS_PER_INCH = 72.0
 
+# Single source of truth for the point<->pixel scale at APPLY_OUTPUT_DPI, shared by
+# rasterization and page-sizing so the two can never drift apart.
+_SCALE = APPLY_OUTPUT_DPI / _POINTS_PER_INCH
+
 # Catalog keys that can carry document-level JavaScript (a name tree, the open action, or
 # an additional-actions dictionary); each is cleared during the strip.
 _JAVASCRIPT_CATALOG_KEYS = ("Names/JavaScript", "OpenAction", "AA")
@@ -52,23 +56,22 @@ def _spans_by_page(spans: list[ApprovedSpan]) -> dict[int, list[ApprovedSpan]]:
 
 
 def _draw_boxes(image: Image.Image, spans: list[ApprovedSpan], scale: float) -> None:
-    """Paint an opaque black box over each span's padded bbox, clamped to the image."""
+    """Paint an opaque black box over each span's padded bboxes, clamped to the image."""
     draw = ImageDraw.Draw(image)
     for span in spans:
-        x0, y0, x1, y1 = span.bbox
-        left = max(0, round((x0 - BOX_PADDING_PTS) * scale))
-        top = max(0, round((y0 - BOX_PADDING_PTS) * scale))
-        right = min(image.width, round((x1 + BOX_PADDING_PTS) * scale))
-        bottom = min(image.height, round((y1 + BOX_PADDING_PTS) * scale))
-        draw.rectangle((left, top, right, bottom), fill=_BLACK)
+        for x0, y0, x1, y1 in span.bboxes:
+            left = max(0, round((x0 - BOX_PADDING_PTS) * scale))
+            top = max(0, round((y0 - BOX_PADDING_PTS) * scale))
+            right = min(image.width, round((x1 + BOX_PADDING_PTS) * scale))
+            bottom = min(image.height, round((y1 + BOX_PADDING_PTS) * scale))
+            draw.rectangle((left, top, right, bottom), fill=_BLACK)
 
 
 def _redact_page_image(page: fitz.Page, spans: list[ApprovedSpan]) -> Image.Image:
     """Rasterize ``page`` at APPLY_OUTPUT_DPI and burn its spans' boxes into the image."""
-    scale = APPLY_OUTPUT_DPI / _POINTS_PER_INCH
     pixmap = page.get_pixmap(dpi=APPLY_OUTPUT_DPI)
-    image = Image.open(io.BytesIO(pixmap.tobytes("png"))).convert("RGB")
-    _draw_boxes(image, spans, scale)
+    image = Image.frombytes("RGB", (pixmap.width, pixmap.height), pixmap.samples)
+    _draw_boxes(image, spans, _SCALE)
     return image
 
 
@@ -78,8 +81,7 @@ def _append_image_page(out: fitz.Document, image: Image.Image) -> None:
     Sizing the page from the pixmap's actual pixel size (not ``page.rect``) keeps output
     dimensions correct even when the source page carried a rotation.
     """
-    scale = APPLY_OUTPUT_DPI / _POINTS_PER_INCH
-    page = out.new_page(width=image.width / scale, height=image.height / scale)
+    page = out.new_page(width=image.width / _SCALE, height=image.height / _SCALE)
     buffer = io.BytesIO()
     image.save(buffer, format="PNG")
     page.insert_image(page.rect, stream=buffer.getvalue())

@@ -51,7 +51,7 @@ _WHITE_MIN = 235
 
 def _span(ref: PiiSpanRef) -> ApprovedSpan:
     """Build the ``ApprovedSpan`` a fixture's ``PiiSpanRef`` describes."""
-    return ApprovedSpan(page_number=ref.page_number, bbox=ref.bbox, text=ref.text)
+    return ApprovedSpan(page_number=ref.page_number, bboxes=[ref.bbox], text=ref.text)
 
 
 def _render_page(pdf_bytes: bytes, page_index: int = 0, dpi: int = APPLY_OUTPUT_DPI) -> Image.Image:
@@ -99,11 +99,19 @@ def _output_image_exifs(pdf_bytes: bytes) -> list[dict[int, object]]:
 class TestApprovedSpanAndApplyResultContract:
     """R1/R2 model contract: span fields and the ApplyResult.passed verdict mirror."""
 
-    def test_approved_span_holds_page_bbox_and_text(self) -> None:
-        span = ApprovedSpan(page_number=1, bbox=(1.0, 2.0, 3.0, 4.0), text="secret")
+    def test_approved_span_holds_page_bboxes_and_text(self) -> None:
+        span = ApprovedSpan(page_number=1, bboxes=[(1.0, 2.0, 3.0, 4.0)], text="secret")
         assert span.page_number == 1
-        assert span.bbox == (1.0, 2.0, 3.0, 4.0)
+        assert span.bboxes == [(1.0, 2.0, 3.0, 4.0)]
         assert span.text == "secret"
+
+    def test_approved_span_holds_multiple_bboxes(self) -> None:
+        # R1: bboxes is a list because one logical span (e.g. text wrapping across
+        # lines) can cover more than one bbox on the same page.
+        span = ApprovedSpan(
+            page_number=1, bboxes=[(1.0, 2.0, 3.0, 4.0), (1.0, 5.0, 3.0, 7.0)], text="secret"
+        )
+        assert span.bboxes == [(1.0, 2.0, 3.0, 4.0), (1.0, 5.0, 3.0, 7.0)]
 
     def test_apply_result_passed_true_when_verdict_pass(self) -> None:
         verify_result = VerifyResult(verdict=VerifyVerdict.PASS, checks=[], findings=[])
@@ -179,7 +187,7 @@ class TestApplyBoxDrawing:
         doc.close()
         overflowing = ApprovedSpan(
             page_number=1,
-            bbox=(0.0, 0.0, page_rect.width + 100, page_rect.height + 100),
+            bboxes=[(0.0, 0.0, page_rect.width + 100, page_rect.height + 100)],
             text=DEFAULT_REDACTED_STRING,
         )
         result = apply(pdf_bytes, [overflowing])
@@ -257,7 +265,18 @@ class TestApplyMetadataStrip:
     def test_rebuild_strips_annotations_and_exif(self) -> None:
         # Amendment B structural regression: rebuild-from-rasterized-images drops
         # annotations and image EXIF for free, distinct from the explicit strip calls above.
-        result = apply(make_annotated_exif_pdf(), [])
+        source_bytes = make_annotated_exif_pdf()
+
+        # Positive control: confirm the source fixture actually carries annotations and
+        # EXIF, so the strip assertions below can't pass vacuously against an empty input.
+        source_doc = fitz.open(stream=source_bytes, filetype="pdf")
+        try:
+            assert list(source_doc[0].annots()) != []
+        finally:
+            source_doc.close()
+        assert any(exif for exif in _output_image_exifs(source_bytes))
+
+        result = apply(source_bytes, [])
         doc = fitz.open(stream=result.pdf_bytes, filetype="pdf")
         try:
             for page in doc:
@@ -291,7 +310,7 @@ class TestApplyValidation:
     @pytest.mark.parametrize("page_number", [0, -1, 2, 99])
     def test_out_of_range_page_number_raises(self, page_number: int) -> None:
         pdf_bytes, ref = make_pii_source_pdf()  # single-page document
-        span = ApprovedSpan(page_number=page_number, bbox=ref.bbox, text=ref.text)
+        span = ApprovedSpan(page_number=page_number, bboxes=[ref.bbox], text=ref.text)
         with pytest.raises(ValueError, match="page number"):
             apply(pdf_bytes, [span])
 

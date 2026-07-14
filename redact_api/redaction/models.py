@@ -70,15 +70,16 @@ class ApprovedSpan(BaseModel):
     Supplied by the caller -- ``apply`` is a pure, DB-free function that never derives
     spans from persistence itself (that projection is redact-api#7's job). ``page_number``
     is 1-based, matching the page numbering used throughout the redaction pipeline
-    (e.g. ``VerifyFinding.page_number``). ``bbox`` is ``(x0, y0, x1, y1)`` in PDF-point
-    units with a top-left origin, the same shape as ``ingest.models.WordBBox.bbox``.
-    ``text`` is the recoverable string being burned in; ``apply`` forwards it to the
-    verify gate so the gate can confirm the string is no longer recoverable from its own
-    output.
+    (e.g. ``VerifyFinding.page_number``). ``bboxes`` is a list of ``(x0, y0, x1, y1)`` in
+    PDF-point units with a top-left origin, the same shape as ``ingest.models.WordBBox.bbox``
+    -- a list because one logical span (e.g. text wrapping across lines) can cover more
+    than one bbox on the same page. ``text`` is the recoverable string being burned in;
+    ``apply`` forwards it to the verify gate so the gate can confirm the string is no
+    longer recoverable from its own output.
     """
 
     page_number: int
-    bbox: tuple[float, float, float, float]
+    bboxes: list[tuple[float, float, float, float]]
     text: str
 
 
