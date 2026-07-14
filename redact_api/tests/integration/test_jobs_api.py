@@ -340,6 +340,33 @@ class TestDispositions:
             assert refreshed.text == "corrected"
 
     @pytest.mark.asyncio
+    async def test_edit_updates_span_bboxes(
+        self, client: AsyncClient, session: AsyncSession, session_maker: SessionMaker
+    ) -> None:
+        job = await _seed_job(session)
+        span = await _seed_span(session, job, bboxes=[[1.0, 2.0, 3.0, 4.0]])
+        await session.commit()
+
+        response = await client.post(
+            f"/jobs/{job.id}/dispositions",
+            json={
+                "items": [
+                    {
+                        "verb": "edit",
+                        "span_id": str(span.id),
+                        "text": span.text,
+                        "bboxes": [[10.0, 20.0, 30.0, 40.0]],
+                    }
+                ]
+            },
+        )
+        assert response.json()["applied"] == 1
+
+        async with session_maker() as check:
+            refreshed = (await check.execute(select(Span).where(Span.id == span.id))).scalar_one()
+            assert refreshed.bboxes == [[10.0, 20.0, 30.0, 40.0]]
+
+    @pytest.mark.asyncio
     async def test_add_manual_span(
         self, client: AsyncClient, session: AsyncSession, session_maker: SessionMaker
     ) -> None:
@@ -612,7 +639,7 @@ class TestExport:
         assert second.status_code == HTTPStatus.OK
         assert second.content == b"%PDF-redacted"
 
-        # No re-transition and no duplicate side effect on the second call.
+        # No re-transition to a different status after the second (already-EXPORTED) call.
         refreshed = await _fetch_job(session_maker, job.id)
         assert refreshed.status == JobStatus.EXPORTED
 
