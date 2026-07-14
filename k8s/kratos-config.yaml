@@ -10,11 +10,11 @@ data:
 
     serve:
       public:
-        base_url: https://kratos.mwarren.dev
+        base_url: https://kratos.example.com
         cors:
           enabled: true
           allowed_origins:
-            - https://app.mwarren.dev
+            - https://app.example.com
           allowed_methods:
             - GET
             - POST
@@ -33,9 +33,9 @@ data:
         base_url: http://kratos-admin:4434
 
     selfservice:
-      default_browser_return_url: https://app.mwarren.dev/
+      default_browser_return_url: https://app.example.com/
       allowed_return_urls:
-        - https://app.mwarren.dev
+        - https://app.example.com
 
       methods:
         password:
@@ -43,25 +43,25 @@ data:
 
       flows:
         error:
-          ui_url: https://app.mwarren.dev/error
+          ui_url: https://app.example.com/error
         settings:
-          ui_url: https://app.mwarren.dev/settings
+          ui_url: https://app.example.com/settings
           privileged_session_max_age: 15m
         recovery:
           enabled: true
-          ui_url: https://app.mwarren.dev/recovery
+          ui_url: https://app.example.com/recovery
         verification:
           enabled: true
-          ui_url: https://app.mwarren.dev/verification
+          ui_url: https://app.example.com/verification
         logout:
           after:
-            default_browser_return_url: https://app.mwarren.dev/login
+            default_browser_return_url: https://app.example.com/login
         login:
-          ui_url: https://app.mwarren.dev/login
+          ui_url: https://app.example.com/login
           lifespan: 10m
         registration:
           lifespan: 10m
-          ui_url: https://app.mwarren.dev/register
+          ui_url: https://app.example.com/register
           after:
             password:
               hooks:
@@ -101,12 +101,12 @@ data:
     session:
       lifespan: 24h
       cookie:
-        domain: .mwarren.dev
+        domain: .example.com
         path: /
         same_site: Lax
 
     courier:
       smtp:
         connection_uri: smtp://mailhog:1025  # Development only - no auth
-        from_address: noreply@mwarren.dev
-        from_name: Warren Enterprises
+        from_address: noreply@example.com
+        from_name: Redact API Dev
