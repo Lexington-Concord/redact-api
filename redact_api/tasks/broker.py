@@ -14,8 +14,12 @@ them, with no upstream declarer -- so it declares the queue itself (``declare=Tr
 from __future__ import annotations
 
 import os
+from typing import TYPE_CHECKING
 
 from taskiq import AsyncBroker, InMemoryBroker
+
+if TYPE_CHECKING:
+    from taskiq_aio_pika import AioPikaBroker
 
 TASKIQ_ENV = os.environ.get("TASKIQ_ENV", "production")
 
@@ -23,7 +27,7 @@ TASKIQ_ENV = os.environ.get("TASKIQ_ENV", "production")
 REDACT_API_QUEUE_NAME = "redact-api-tasks"
 
 
-def build_production_broker() -> AsyncBroker:
+def build_production_broker() -> AioPikaBroker:
     """Construct the RabbitMQ + Redis broker for non-test environments.
 
     ``declare=True`` because redact-api owns its queue end to end (no separate API process
@@ -50,9 +54,4 @@ def build_production_broker() -> AsyncBroker:
     ).with_result_backend(RedisAsyncResultBackend(redis_url=settings.redis_url))
 
 
-broker: AsyncBroker
-
-if TASKIQ_ENV == "test":
-    broker = InMemoryBroker()
-else:
-    broker = build_production_broker()
+broker: AsyncBroker = InMemoryBroker() if TASKIQ_ENV == "test" else build_production_broker()

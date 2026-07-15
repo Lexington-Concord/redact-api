@@ -106,6 +106,9 @@ max-complexity = 10
 "redact_api/tests/**" = ["S", "PT009", "PLR2004", "ARG002", "TRY002"]
 # PLC0415 allows late imports for optional dependencies (azure, aws, gcs)
 "redact_api/core/storage.py" = ["PLC0415"]
+# PLC0415 allows the production-only taskiq_aio_pika/taskiq_redis imports to stay deferred
+# so importing this module under TASKIQ_ENV=test never requires those packages to connect.
+"redact_api/tasks/broker.py" = ["PLC0415"]
 # S105 false positive: the VerifyVerdict.PASS enum member (value "pass") is a
 # verdict, not a hardcoded password. Renaming would break the R3 public contract.
 "redact_api/redaction/models.py" = ["S105"]
