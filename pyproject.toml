@@ -24,11 +24,23 @@ dependencies = [
   "pytesseract>=0.3.10",
   "pillow>=10.1.0",
   "rapidfuzz>=3.9.0",
+  # Tier-2 NER detection (redact-api#5). Presidio drives spaCy's en_core_web_lg
+  # CPU model; spaCy 3.8.14 is excluded by Presidio's own requires_dist, so pin
+  # 3.8.13. The model is a pure-data wheel pulled from the spaCy releases page.
+  "presidio-analyzer==2.2.363",
+  "spacy==3.8.13",
+  "en-core-web-lg @ https://github.com/explosion/spacy-models/releases/download/en_core_web_lg-3.8.0/en_core_web_lg-3.8.0-py3-none-any.whl",
 ]
 
 [build-system]
 requires = ["hatchling>=1.24.2"]
 build-backend = "hatchling.build"
+
+[tool.hatch.metadata]
+# Required so the en_core_web_lg spaCy model can be declared as a direct-URL
+# wheel dependency (redact-api#5) -- hatchling rejects direct references unless
+# this is opted into explicitly.
+allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["redact_api"]
