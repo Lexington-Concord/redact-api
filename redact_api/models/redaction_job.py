@@ -66,6 +66,10 @@ class RedactionJob(TimestampedTable, RedactionJobBase, table=True):
 
     __tablename__ = "redaction_job"
 
+    # Storage key of the verified redacted PDF, set once ``apply`` passes the verify gate;
+    # ``None`` until then. Read back verbatim by export -- export never recomputes.
+    redacted_pdf_key: str | None = Field(default=None, nullable=True)
+
     __table_args__ = (sa.Index("ix_redaction_job_organization_id", "organization_id"),)
 
 

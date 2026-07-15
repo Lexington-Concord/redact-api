@@ -5,6 +5,7 @@ from fastapi import APIRouter
 from redact_api.api import (
     documents,
     health,
+    jobs,
     memberships,
     organizations,
     ping,
@@ -18,3 +19,4 @@ router.include_router(organizations.router)
 router.include_router(users.router)
 router.include_router(memberships.router)
 router.include_router(documents.router)
+router.include_router(jobs.router)
