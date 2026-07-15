@@ -29,8 +29,9 @@ from redact_api.models.audit_entry import AuditAction
 class ManifestDisposition(BaseModel):
     """One span-level audit row (``span_id IS NOT NULL``): a reviewer disposition of a span.
 
-    ``text_digest`` is the SHA-256 digest of the normalized span text (never the text itself);
-    it may be ``None`` only in the degenerate case of a span-level row appended without text.
+    ``text_digest`` is the SHA-256 digest of the normalized span text (never the text itself).
+    ``append_audit_entry`` rejects new span-level entries with no text, so ``None`` here would
+    only ever reflect a row written before that guard existed, not a currently-reachable path.
     """
 
     span_id: UUID
