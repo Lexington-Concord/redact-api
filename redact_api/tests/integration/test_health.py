@@ -1,7 +1,7 @@
 """Tests for health check endpoints including error path coverage."""
 
 from http import HTTPStatus
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from httpx import AsyncClient
@@ -19,11 +19,35 @@ async def test_ping(client: AsyncClient) -> None:
 
 @pytest.mark.asyncio
 async def test_health_success(client: AsyncClient) -> None:
-    """Health endpoint returns ok status when database is healthy."""
-    response = await client.get("/health")
+    """Readiness endpoint returns ok when the database and broker are both healthy."""
+    with patch("redact_api.api.health._check_broker", new_callable=AsyncMock):
+        response = await client.get("/health")
 
     assert response.status_code == HTTPStatus.OK
     assert response.json() == {"status": "ok"}
+
+
+@pytest.mark.asyncio
+async def test_health_live_success(client: AsyncClient) -> None:
+    """Liveness endpoint returns ok on a healthy database and never checks the broker."""
+    with patch("redact_api.api.health._check_broker", new_callable=AsyncMock) as mock_broker:
+        response = await client.get("/health/live")
+
+    assert response.status_code == HTTPStatus.OK
+    assert response.json() == {"status": "ok"}
+    mock_broker.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_health_returns_503_on_broker_unavailable(client: AsyncClient) -> None:
+    """Readiness endpoint returns 503 when the broker cannot be reached."""
+    with patch("redact_api.api.health.aio_pika.connect", new_callable=AsyncMock) as mock_connect:
+        mock_connect.side_effect = ConnectionError("broker down")
+
+        response = await client.get("/health")
+
+    assert response.status_code == HTTPStatus.SERVICE_UNAVAILABLE
+    assert response.json()["detail"] == "Broker unavailable"
 
 
 class TestHealthErrorPaths:
@@ -69,7 +93,10 @@ class TestHealthLogging:
     @pytest.mark.asyncio
     async def test_health_logs_success_with_timing(self, client: AsyncClient) -> None:
         """Health check logs success with response time."""
-        with patch("redact_api.api.health.logger") as mock_logger:
+        with (
+            patch("redact_api.api.health._check_broker", new_callable=AsyncMock),
+            patch("redact_api.api.health.logger") as mock_logger,
+        ):
             response = await client.get("/health")
 
             assert response.status_code == HTTPStatus.OK

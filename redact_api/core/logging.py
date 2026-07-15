@@ -56,6 +56,9 @@ DEFAULT_REQUEST_ID_HEADER = "x-request-id"
 _request_id_var: ContextVar[str | None] = ContextVar("request_id", default=None)
 _user_id_var: ContextVar[str | None] = ContextVar("user_id", default=None)
 _org_id_var: ContextVar[str | None] = ContextVar("org_id", default=None)
+# Set by the TaskIQ JobContextMiddleware so every log line a task emits carries the
+# job id it is processing (redact-api#8); None outside a task's execution.
+_job_id_var: ContextVar[str | None] = ContextVar("job_id", default=None)
 
 
 def set_request_id(request_id: str) -> None:
@@ -106,6 +109,21 @@ def get_org_id() -> str | None:
     return _org_id_var.get()
 
 
+def set_job_context(job_id: str) -> None:
+    """Set job ID in context for the current task."""
+    _job_id_var.set(job_id)
+
+
+def clear_job_context() -> None:
+    """Clear job ID from context (call on task completion/error)."""
+    _job_id_var.set(None)
+
+
+def get_job_id() -> str | None:
+    """Get job ID from context."""
+    return _job_id_var.get()
+
+
 def get_logging_context() -> dict[str, str | None]:
     """Get all logging context as dict for structured logging.
 
@@ -120,6 +138,7 @@ def get_logging_context() -> dict[str, str | None]:
         "request_id": get_request_id(),
         "user_id": get_user_id(),
         "org_id": get_org_id(),
+        "job_id": get_job_id(),
     }
 
 

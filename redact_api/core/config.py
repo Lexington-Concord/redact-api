@@ -222,6 +222,19 @@ class Settings(BaseSettings):
         description="Use HTTPS when connecting to the MinIO/S3 endpoint",
     )
 
+    # TaskIQ async pipeline (redact-api#8): the ingest/detect/apply tasks publish to
+    # RabbitMQ and record results in Redis. Same env-var names as the worker template.
+    rabbitmq_url: str = Field(
+        default="amqp://guest:guest@localhost:5672/",
+        alias="RABBITMQ_URL",
+        description="RabbitMQ AMQP connection URL for the async task broker",
+    )
+    redis_url: str = Field(
+        default="redis://localhost:6379/0",
+        alias="REDIS_URL",
+        description="Redis connection URL for the TaskIQ result backend",
+    )
+
     @field_validator("jwt_algorithm")
     @classmethod
     def validate_jwt_algorithm(cls, value: str) -> str:

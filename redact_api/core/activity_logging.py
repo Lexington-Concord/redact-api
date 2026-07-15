@@ -29,7 +29,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from redact_api.core.config import settings
 from redact_api.core.logging import get_logging_context
-from redact_api.db.session import async_session_maker
+from redact_api.db import session as db_session
 from redact_api.models.activity_log import ActivityAction, ActivityLog
 
 LOGGER = logging.getLogger(__name__)
@@ -133,8 +133,10 @@ async def log_activity(
                 },
             )
         else:
-            # Fire-and-forget: commit immediately in own transaction
-            async with async_session_maker() as temp_session:
+            # Fire-and-forget: commit immediately in own transaction. Reference the
+            # session maker via the module (not a bound import) so tests that repoint
+            # db_session.async_session_maker to the worker DB are honored here too.
+            async with db_session.async_session_maker() as temp_session:
                 temp_session.add(activity)
                 await temp_session.commit()
                 context = get_logging_context()

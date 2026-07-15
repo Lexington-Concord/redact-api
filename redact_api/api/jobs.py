@@ -25,19 +25,16 @@ from redact_api.ingest.exceptions import (
     MalformedPdfError,
     UnsupportedPageError,
 )
-from redact_api.ingest.service import ingest_pdf
+from redact_api.ingest.pdf import validate_pdf_structure
 from redact_api.models.document import Document
 from redact_api.models.page import Page
 from redact_api.models.redaction_job import JobStatus, RedactionJob, RedactionJobRead
 from redact_api.models.span import Span, SpanRead
-from redact_api.redaction.apply import apply
-from redact_api.redaction.models import VerifyResult
 from redact_api.services.jobs_service import (
     DispositionBatchRequest,
     DispositionBatchResult,
     SpanNotFoundError,
     apply_disposition_batch,
-    project_approved_spans,
 )
 from redact_api.services.redaction_job_service import (
     InvalidStateTransitionError,
@@ -46,6 +43,8 @@ from redact_api.services.redaction_job_service import (
 )
 from redact_api.storage import keys
 from redact_api.storage.dependency import StorageClientDep
+from redact_api.tasks.apply_job import apply_job as apply_job_task
+from redact_api.tasks.ingest_job import ingest_job as ingest_job_task
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 
@@ -63,22 +62,6 @@ async def _get_job_or_404(session: SessionDep, tenant: TenantDep, job_id: UUID) 
     return job
 
 
-def _verify_failure_detail(verify_result: VerifyResult) -> dict[str, object]:
-    """Build a digest-only 422 body for an apply-time verify FAIL (carries no raw PII)."""
-    return {
-        "message": "Redaction failed verification; job marked failed",
-        "verdict": verify_result.verdict.value,
-        "findings": [
-            {
-                "check_type": finding.check_type.value,
-                "page_number": finding.page_number,
-                "redacted_string_digest": finding.redacted_string_digest,
-            }
-            for finding in verify_result.findings
-        ],
-    }
-
-
 @router.post("", response_model=RedactionJobRead, status_code=status.HTTP_201_CREATED)
 @log_activity_decorator(ActivityAction.CREATE, "redaction_job")
 async def create_job(
@@ -87,12 +70,14 @@ async def create_job(
     storage: StorageClientDep,
     file: UploadFile = File(...),  # noqa: B008
 ) -> RedactionJobRead:
-    """Upload a PDF, create its document + job, stage the original, and ingest synchronously.
+    """Upload a PDF, create its document + job, run the cheap structural pre-check, and enqueue ingest_job.
 
-    Creates ``Document`` + ``RedactionJob`` in one transaction, uploads the original PDF to
-    object storage, runs ``ingest_pdf`` (which stages per-page artifacts), then walks the
-    job UPLOADED -> INGESTED -> DETECTED -> IN_REVIEW. Ingest rejections map to 422; an
-    over-limit upload is rejected at 413 before any work.
+    Creates ``Document`` + ``RedactionJob`` in one transaction and stages the original PDF.
+    ``validate_pdf_structure`` runs synchronously here (no rasterization) so a structurally
+    invalid upload still fails fast with 422/413 before any async work is queued. The
+    expensive path -- per-page artifact staging and detection -- now runs in ``ingest_job``
+    (which chains into ``detect_job`` on success), enqueued after commit. The response
+    reflects the job at UPLOADED; callers poll GET /jobs/{id} for status.
     """
     if not file.filename:
         missing_filename_msg = "File must have a filename"
@@ -108,6 +93,13 @@ async def create_job(
         max_mb = settings.max_file_size_bytes / 1024 / 1024
         too_large_msg = f"File exceeds maximum size of {max_mb:.1f}MB"
         raise HTTPException(status_code=status.HTTP_413_CONTENT_TOO_LARGE, detail=too_large_msg)
+
+    # Fail fast on a structurally invalid upload before persisting or enqueuing anything --
+    # same four ingest exceptions the async ingest_pdf path would raise, mapped to 422.
+    try:
+        validate_pdf_structure(pdf_bytes)
+    except (DocumentTooLargeError, EncryptedPdfError, MalformedPdfError, UnsupportedPageError) as error:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=error.message) from error
 
     document = Document(
         filename=file.filename,
@@ -133,23 +125,13 @@ async def create_job(
     session.add(job)
     await session.flush()  # type: ignore[attr-defined]  # assign job.id
 
-    # Why: ingest runs before the original is uploaded so a rejected PDF (oversized,
-    # encrypted, malformed, unsupported page) never leaves an orphaned original blob in
-    # storage with no committed DB row pointing at it -- ingest_pdf validates fully in
-    # memory before it uploads anything of its own (see its docstring).
-    try:
-        await ingest_pdf(document.id, pdf_bytes, storage)
-    except (DocumentTooLargeError, EncryptedPdfError, MalformedPdfError, UnsupportedPageError) as error:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=error.message) from error
-
     await storage.upload_bytes(original_key, pdf_bytes, content_type=_PDF_CONTENT_TYPE)
-
-    await transition_job_status(session, job, JobStatus.INGESTED)
-    await transition_job_status(session, job, JobStatus.DETECTED)
-    await transition_job_status(session, job, JobStatus.IN_REVIEW)
 
     await session.commit()
     await session.refresh(job)
+
+    # Enqueue after commit so the worker observes the persisted UPLOADED job.
+    await ingest_job_task.kiq(job_id=str(job.id))
     return RedactionJobRead.model_validate(job)
 
 
@@ -210,15 +192,16 @@ async def apply_job(
     job_id: UUID,
     session: SessionDep,
     tenant: TenantDep,
-    storage: StorageClientDep,
     role_check: RequireAdmin,
 ) -> RedactionJobRead:
-    """Burn approved spans into the original PDF and gate the output through verify.
+    """Move IN_REVIEW -> APPLYING and enqueue apply_job to burn approved spans and verify.
 
-    ADMIN-only. Moves IN_REVIEW -> APPLYING (409 on a bad edge or undispositioned spans),
-    downloads the original, projects approved spans (422 on a malformed bbox shape), runs
-    ``apply``, and on PASS stores the redacted PDF and moves to VERIFIED. On a verify FAIL
-    the job moves to FAILED and the endpoint returns 422 with a digest-only summary.
+    ADMIN-only. Validates the IN_REVIEW -> APPLYING edge synchronously (409 on a bad edge or
+    undispositioned spans) so a caller still gets immediate feedback on a wrong-state apply,
+    then enqueues ``apply_job`` (job_id only) and returns the job at APPLYING. The burn-in
+    and verify gate now run asynchronously; callers poll GET /jobs/{id} for the outcome (a
+    verify FAIL is no longer visible synchronously on this response -- it surfaces as
+    job.status == FAILED).
     """
     _ = role_check
     job = await _get_job_or_404(session, tenant, job_id)
@@ -228,26 +211,11 @@ async def apply_job(
     except (InvalidStateTransitionError, UndispositionedSpansError) as error:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
 
-    original_bytes = await storage.download_bytes(keys.original_pdf_key(job.document_id))
-    approved_spans = await project_approved_spans(session, job)
-    result = apply(original_bytes, approved_spans)
-
-    if not result.passed:
-        await transition_job_status(session, job, JobStatus.FAILED)
-        await session.commit()
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail=_verify_failure_detail(result.verify_result),
-        )
-
-    redacted_key = keys.redacted_pdf_key(job.id)
-    await storage.upload_bytes(redacted_key, result.pdf_bytes, content_type=_PDF_CONTENT_TYPE)
-    job.redacted_pdf_key = redacted_key
-    session.add(job)
-    await transition_job_status(session, job, JobStatus.VERIFIED)
-
     await session.commit()
     await session.refresh(job)
+
+    # Enqueue after commit so the worker observes the persisted APPLYING job.
+    await apply_job_task.kiq(job_id=str(job.id))
     return RedactionJobRead.model_validate(job)
 
 

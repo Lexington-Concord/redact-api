@@ -146,4 +146,38 @@ activity_log_entries_created = Counter(
     ["resource_type", "action"],
 )
 
+# TaskIQ pipeline metrics (redact-api#8). Label shapes copy the worker template's
+# metrics_mw contract: lifecycle counters carry (environment, task_name); the
+# duration histogram and in-progress gauge carry task_name only.
+tasks_started_total = Counter(
+    "tasks_started_total",
+    "Total number of tasks started",
+    ["environment", "task_name"],
+)
+
+tasks_completed_total = Counter(
+    "tasks_completed_total",
+    "Total number of tasks completed successfully",
+    ["environment", "task_name"],
+)
+
+tasks_failed_total = Counter(
+    "tasks_failed_total",
+    "Total number of tasks that failed",
+    ["environment", "task_name"],
+)
+
+task_duration_seconds = Histogram(
+    "task_duration_seconds",
+    "Task execution duration in seconds",
+    ["task_name"],
+    buckets=[0.1, 0.5, 1.0, 5.0, 10.0, 30.0, 60.0, 300.0, 600.0, 1800.0, 3600.0],
+)
+
+tasks_in_progress = Gauge(
+    "tasks_in_progress",
+    "Number of tasks currently being executed",
+    ["task_name"],
+)
+
 metrics_app = make_asgi_app()

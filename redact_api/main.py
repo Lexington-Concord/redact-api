@@ -52,6 +52,7 @@ from redact_api.core.metrics import metrics_app
 from redact_api.core.pagination import configure_pagination
 from redact_api.db.session import PoolConfig, create_db_engine, create_session_maker
 from redact_api.storage.client import StorageClient
+from redact_api.tasks.broker import broker
 
 logger = logging.getLogger(__name__)
 
@@ -119,10 +120,19 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         error_msg = f"Failed to connect to database on startup: {exc}. Check DATABASE_URL={db_url}"
         raise RuntimeError(error_msg) from exc
 
+    # Startup: start the TaskIQ broker (redact-api#8). Why: AioPikaBroker.kick() (invoked by
+    # every `.kiq()` call from the API's job-creation/apply endpoints) raises NoStartupError
+    # until `startup()` has run. The `taskiq worker` CLI calls this automatically for the
+    # worker process, but nothing does so for this uvicorn/API process -- without this call,
+    # every enqueue from the API would raise in production. InMemoryBroker (TASKIQ_ENV=test)
+    # implements startup()/shutdown() as safe no-ops, so this is free under the test suite.
+    await broker.startup()
+
     yield
 
     # Shutdown: Clean up resources
     logger.info("Shutting down: draining database connection pool")
+    await broker.shutdown()
     await app.state.engine.dispose()
     logger.info("Shutdown complete: all database connections closed")
 

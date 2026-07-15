@@ -237,12 +237,23 @@ deployments:
                 port: 8000
               initialDelaySeconds: 5
               periodSeconds: 10
+              # redact-api#8: /health runs a DB check (up to 2.0s) then a broker check (up
+              # to 2.0s) sequentially -- worst case ~4s, well over Kubernetes' 1s default
+              # probe timeout. Without this, any DB/broker round-trip slower than 1s (not
+              # down, just slow) spuriously fails readiness.
+              timeoutSeconds: 5
             livenessProbe:
               httpGet:
-                path: /health
+                path: /health/live
                 port: 8000
               initialDelaySeconds: 10
               periodSeconds: 20
+              # redact-api#8: /health/live only runs the DB check, bounded by
+              # HEALTH_DB_TIMEOUT_SECONDS (2.0s) -- still over Kubernetes' 1s default probe
+              # timeout. This matters even more than the readinessProbe override above: a
+              # liveness failure restarts the pod, killing any in-flight ingest/detect/apply
+              # task, whereas a readiness failure only pulls the pod from rotation.
+              timeoutSeconds: 3
             resources:
               requests:
                 cpu: "100m"

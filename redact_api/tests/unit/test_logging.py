@@ -15,15 +15,19 @@ from starlette.responses import Response
 
 from redact_api.core.logging import (
     LoggingMiddleware,
+    _job_id_var,
     _org_id_var,
     _request_id_var,
     _user_id_var,
+    clear_job_context,
+    get_job_id,
     get_logger,
     get_logging_context,
     get_org_id,
     get_request_id,
     get_user_id,
     log_with_context,
+    set_job_context,
     set_request_id,
     set_user_context,
 )
@@ -46,10 +50,12 @@ def reset_context_vars() -> Generator[None]:
     token1 = _request_id_var.set(None)
     token2 = _user_id_var.set(None)
     token3 = _org_id_var.set(None)
+    token4 = _job_id_var.set(None)
     yield
     _request_id_var.reset(token1)
     _user_id_var.reset(token2)
     _org_id_var.reset(token3)
+    _job_id_var.reset(token4)
 
 
 class TestRequestIdContextVar:
@@ -133,6 +139,7 @@ class TestGetLoggingContext:
             "request_id": "req-1",
             "user_id": "user-1",
             "org_id": "org-1",
+            "job_id": None,
         }
 
     def test_returns_none_values_when_not_set(self) -> None:
@@ -142,6 +149,7 @@ class TestGetLoggingContext:
             "request_id": None,
             "user_id": None,
             "org_id": None,
+            "job_id": None,
         }
 
     def test_returns_partial_context(self) -> None:
@@ -153,7 +161,28 @@ class TestGetLoggingContext:
             "request_id": "req-1",
             "user_id": None,
             "org_id": None,
+            "job_id": None,
         }
+
+
+class TestJobContextVar:
+    """Tests for the task-scoped job ID context variable functions."""
+
+    def test_set_and_get_job_id(self) -> None:
+        set_job_context("job-1")
+        assert get_job_id() == "job-1"
+
+    def test_get_job_id_returns_none_when_not_set(self) -> None:
+        assert get_job_id() is None
+
+    def test_clear_job_context(self) -> None:
+        set_job_context("job-1")
+        clear_job_context()
+        assert get_job_id() is None
+
+    def test_job_id_included_in_logging_context(self) -> None:
+        set_job_context("job-1")
+        assert get_logging_context()["job_id"] == "job-1"
 
 
 class TestLogWithContext:
@@ -178,6 +207,7 @@ class TestLogWithContext:
                 "request_id": "req-1",
                 "user_id": "user-1",
                 "org_id": "org-1",
+                "job_id": None,
                 "custom_field": "custom_value",
             },
         )
@@ -195,6 +225,7 @@ class TestLogWithContext:
                 "request_id": "req-1",
                 "user_id": None,
                 "org_id": None,
+                "job_id": None,
             },
         )
 

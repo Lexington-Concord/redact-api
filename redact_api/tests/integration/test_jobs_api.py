@@ -14,6 +14,7 @@ sessions observe them); post-request state is asserted through a *fresh* session
 from __future__ import annotations
 
 from http import HTTPStatus
+from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 import pytest
@@ -30,18 +31,10 @@ from redact_api.models.page import Page
 from redact_api.models.redaction_job import JobStatus, RedactionJob
 from redact_api.models.span import SourceTier, Span
 from redact_api.models.user import User
-from redact_api.redaction.models import (
-    ApplyResult,
-    ApprovedSpan,
-    CheckSummary,
-    CheckType,
-    VerifyFinding,
-    VerifyResult,
-    VerifyVerdict,
-)
 from redact_api.storage import keys
+from redact_api.tasks.apply_job import apply_job as apply_job_task
+from redact_api.tasks.ingest_job import ingest_job as ingest_job_task
 from redact_api.tests.conftest import FakeStorageClient
-from redact_api.tests.fixtures.apply_pdfs import make_pii_source_pdf
 from redact_api.tests.fixtures.ingest_pdfs import (
     build_encrypted_pdf,
     build_malformed_pdf,
@@ -53,6 +46,21 @@ DEFAULT_ORG_ID = UUID("00000000-0000-0000-0000-000000000000")
 DEFAULT_USER_ID = UUID("00000000-0000-0000-0000-000000000001")
 
 SessionMaker = async_sessionmaker[AsyncSession]
+
+
+@pytest.fixture(autouse=True)
+def stub_task_enqueue(monkeypatch: pytest.MonkeyPatch) -> dict[str, AsyncMock]:
+    """Stub the task ``.kiq`` enqueues so endpoint tests exercise only the synchronous seam.
+
+    The async pipeline is tested directly in the test_tasks_* modules; here we assert the
+    endpoint's own behavior (state transition + that it enqueued) without the InMemoryBroker
+    running the full ingest/detect/apply chain as a background task.
+    """
+    ingest_kiq = AsyncMock()
+    apply_kiq = AsyncMock()
+    monkeypatch.setattr(ingest_job_task, "kiq", ingest_kiq)
+    monkeypatch.setattr(apply_job_task, "kiq", apply_kiq)
+    return {"ingest": ingest_kiq, "apply": apply_kiq}
 
 
 # --------------------------------------------------------------------------- seed helpers
@@ -104,17 +112,6 @@ async def _seed_span(
     return span
 
 
-async def _seed_disposition(
-    session: AsyncSession,
-    span: Span,
-    action: DispositionAction,
-) -> Disposition:
-    disposition = Disposition(span_id=span.id, action=action, reviewer_id=DEFAULT_USER_ID)
-    session.add(disposition)
-    await session.flush()  # type: ignore[attr-defined]
-    return disposition
-
-
 async def _seed_member_user(session: AsyncSession) -> User:
     user = User(name="Member", email=f"member-{uuid4()}@example.com")
     session.add(user)
@@ -149,8 +146,11 @@ def _member_headers(user_id: UUID) -> dict[str, str]:
 
 class TestCreateJob:
     @pytest.mark.asyncio
-    async def test_upload_creates_in_review_job(
-        self, client: AsyncClient, fake_storage_client: FakeStorageClient
+    async def test_upload_creates_uploaded_job_and_enqueues(
+        self,
+        client: AsyncClient,
+        fake_storage_client: FakeStorageClient,
+        stub_task_enqueue: dict[str, AsyncMock],
     ) -> None:
         pdf_bytes = build_multi_page_pdf(page_count=1)
 
@@ -158,9 +158,11 @@ class TestCreateJob:
 
         assert response.status_code == HTTPStatus.CREATED
         body = response.json()
-        assert body["status"] == JobStatus.IN_REVIEW.value
+        # The endpoint now returns the job at UPLOADED and hands the expensive path to ingest_job.
+        assert body["status"] == JobStatus.UPLOADED.value
         document_id = UUID(body["document_id"])
         assert keys.original_pdf_key(document_id) in fake_storage_client.uploads
+        stub_task_enqueue["ingest"].assert_awaited_once_with(job_id=body["id"])
 
     @pytest.mark.asyncio
     async def test_rejects_non_pdf(self, client: AsyncClient) -> None:
@@ -437,62 +439,24 @@ class TestDispositions:
 
 class TestApply:
     @pytest.mark.asyncio
-    async def test_apply_zero_spans_verifies(
-        self, client: AsyncClient, session: AsyncSession, fake_storage_client: FakeStorageClient
-    ) -> None:
-        job = await _seed_job(session)
-        await session.commit()
-        fake_storage_client.uploads[keys.original_pdf_key(job.document_id)] = build_multi_page_pdf(page_count=1)
-
-        response = await client.post(f"/jobs/{job.id}/apply")
-        assert response.status_code == HTTPStatus.OK
-        assert response.json()["status"] == JobStatus.VERIFIED.value
-        assert keys.redacted_pdf_key(job.id) in fake_storage_client.uploads
-
-    @pytest.mark.asyncio
-    async def test_apply_rejected_span_verifies(
-        self, client: AsyncClient, session: AsyncSession, fake_storage_client: FakeStorageClient
-    ) -> None:
-        job = await _seed_job(session)
-        span = await _seed_span(session, job)
-        await _seed_disposition(session, span, DispositionAction.REJECTED)
-        await session.commit()
-        fake_storage_client.uploads[keys.original_pdf_key(job.document_id)] = build_multi_page_pdf(page_count=1)
-
-        response = await client.post(f"/jobs/{job.id}/apply")
-        assert response.status_code == HTTPStatus.OK
-        assert response.json()["status"] == JobStatus.VERIFIED.value
-        assert keys.redacted_pdf_key(job.id) in fake_storage_client.uploads
-
-    @pytest.mark.asyncio
-    async def test_apply_only_projects_approved_spans(
+    async def test_apply_transitions_to_applying_and_enqueues(
         self,
         client: AsyncClient,
         session: AsyncSession,
-        fake_storage_client: FakeStorageClient,
-        monkeypatch: pytest.MonkeyPatch,
+        session_maker: SessionMaker,
+        stub_task_enqueue: dict[str, AsyncMock],
     ) -> None:
-        """R5 safety invariant: a REJECTED span must never reach ``apply()``'s burn set."""
         job = await _seed_job(session)
-        approved_span = await _seed_span(session, job, page_number=1, text="approved-pii")
-        rejected_span = await _seed_span(session, job, page_number=2, text="rejected-pii")
-        await _seed_disposition(session, approved_span, DispositionAction.APPROVED)
-        await _seed_disposition(session, rejected_span, DispositionAction.REJECTED)
         await session.commit()
-        fake_storage_client.uploads[keys.original_pdf_key(job.document_id)] = build_multi_page_pdf(page_count=1)
-
-        captured_spans: list[ApprovedSpan] = []
-
-        def _capturing_apply(_pdf_bytes: bytes, spans: list[ApprovedSpan]) -> ApplyResult:
-            captured_spans.extend(spans)
-            verify_result = VerifyResult(verdict=VerifyVerdict.PASS, checks=[], findings=[])
-            return ApplyResult(pdf_bytes=b"redacted", verify_result=verify_result)
-
-        monkeypatch.setattr("redact_api.api.jobs.apply", _capturing_apply)
 
         response = await client.post(f"/jobs/{job.id}/apply")
         assert response.status_code == HTTPStatus.OK
-        assert [span.text for span in captured_spans] == ["approved-pii"]
+        # The burn-in + verify now run async in apply_job; the endpoint lands the job at APPLYING.
+        assert response.json()["status"] == JobStatus.APPLYING.value
+        stub_task_enqueue["apply"].assert_awaited_once_with(job_id=str(job.id))
+
+        refreshed = await _fetch_job(session_maker, job.id)
+        assert refreshed.status == JobStatus.APPLYING
 
     @pytest.mark.asyncio
     async def test_apply_tenant_isolation_404(self, client: AsyncClient, session: AsyncSession) -> None:
@@ -507,15 +471,18 @@ class TestApply:
 
     @pytest.mark.asyncio
     async def test_apply_undispositioned_spans_409(
-        self, client: AsyncClient, session: AsyncSession, fake_storage_client: FakeStorageClient
+        self,
+        client: AsyncClient,
+        session: AsyncSession,
+        stub_task_enqueue: dict[str, AsyncMock],
     ) -> None:
         job = await _seed_job(session)
         await _seed_span(session, job)
         await session.commit()
-        fake_storage_client.uploads[keys.original_pdf_key(job.document_id)] = build_multi_page_pdf(page_count=1)
 
         response = await client.post(f"/jobs/{job.id}/apply")
         assert response.status_code == HTTPStatus.CONFLICT
+        stub_task_enqueue["apply"].assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_apply_wrong_state_409(self, client: AsyncClient, session: AsyncSession) -> None:
@@ -524,61 +491,6 @@ class TestApply:
 
         response = await client.post(f"/jobs/{job.id}/apply")
         assert response.status_code == HTTPStatus.CONFLICT
-
-    @pytest.mark.asyncio
-    async def test_apply_malformed_bbox_422(
-        self,
-        client: AsyncClient,
-        session: AsyncSession,
-        session_maker: SessionMaker,
-        fake_storage_client: FakeStorageClient,
-    ) -> None:
-        job = await _seed_job(session)
-        span = await _seed_span(session, job, bboxes=[[1.0, 2.0, 3.0]])
-        await _seed_disposition(session, span, DispositionAction.APPROVED)
-        await session.commit()
-        fake_storage_client.uploads[keys.original_pdf_key(job.document_id)] = build_multi_page_pdf(page_count=1)
-
-        response = await client.post(f"/jobs/{job.id}/apply")
-        assert response.status_code == HTTPStatus.UNPROCESSABLE_CONTENT
-
-        refreshed = await _fetch_job(session_maker, job.id)
-        assert refreshed.status == JobStatus.IN_REVIEW
-
-    @pytest.mark.asyncio
-    async def test_apply_verify_fail_422_marks_failed(
-        self,
-        client: AsyncClient,
-        session: AsyncSession,
-        session_maker: SessionMaker,
-        fake_storage_client: FakeStorageClient,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        job = await _seed_job(session)
-        span = await _seed_span(session, job)
-        await _seed_disposition(session, span, DispositionAction.APPROVED)
-        await session.commit()
-        pdf_bytes, _ref = make_pii_source_pdf()
-        fake_storage_client.uploads[keys.original_pdf_key(job.document_id)] = pdf_bytes
-
-        def _failing_apply(_pdf_bytes: bytes, _spans: list[ApprovedSpan]) -> ApplyResult:
-            verify_result = VerifyResult(
-                verdict=VerifyVerdict.FAIL,
-                checks=[CheckSummary(check_type=CheckType.TEXT_LAYER, passed=False, pages_checked=1)],
-                findings=[
-                    VerifyFinding(redacted_string_digest="deadbeef", check_type=CheckType.TEXT_LAYER, page_number=1)
-                ],
-            )
-            return ApplyResult(pdf_bytes=b"redacted", verify_result=verify_result)
-
-        monkeypatch.setattr("redact_api.api.jobs.apply", _failing_apply)
-
-        response = await client.post(f"/jobs/{job.id}/apply")
-        assert response.status_code == HTTPStatus.UNPROCESSABLE_CONTENT
-        assert response.json()["detail"]["verdict"] == VerifyVerdict.FAIL.value
-
-        refreshed = await _fetch_job(session_maker, job.id)
-        assert refreshed.status == JobStatus.FAILED
 
     @pytest.mark.asyncio
     async def test_apply_member_forbidden(self, client: AsyncClient, session: AsyncSession) -> None:

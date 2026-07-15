@@ -37,6 +37,12 @@ from sqlalchemy.pool import NullPool
 from sqlmodel import SQLModel
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response
+from taskiq import InMemoryBroker
+
+# Force the InMemoryBroker before importing the app: redact_api.tasks.broker decides the
+# broker type from TASKIQ_ENV at import time, and importing redact_api.main (below) pulls
+# in the task package. Must run before that import so the suite never touches RabbitMQ.
+os.environ.setdefault("TASKIQ_ENV", "test")
 
 from redact_api.core.auth import AuthMiddleware, CurrentUser, _parse_user_headers, get_user_from_headers
 from redact_api.core.tenants import TenantContext
@@ -47,6 +53,7 @@ from redact_api.models.membership import Membership, MembershipRole
 from redact_api.models.organization import Organization
 from redact_api.models.user import User
 from redact_api.storage.client import StorageClient
+from redact_api.tasks.broker import broker as _task_broker
 
 # Import settings fixtures for test isolation and pytest-xdist compatibility
 from redact_api.tests.fixtures.settings import (  # noqa: F401
@@ -91,6 +98,18 @@ class FakeStorageClient(StorageClient):
 def fake_storage_client() -> FakeStorageClient:
     """A fresh in-memory storage double, wired into ``app.state.storage_client`` by ``client``."""
     return FakeStorageClient()
+
+
+@pytest.fixture
+def test_broker() -> InMemoryBroker:
+    """Expose the process-wide broker singleton, asserting it is the in-memory test broker.
+
+    ``TASKIQ_ENV=test`` (set at the top of this module) makes ``redact_api.tasks.broker.broker``
+    an ``InMemoryBroker`` for the whole session; this fixture just yields it back after
+    confirming the type, mirroring the worker template's ``test_broker`` fixture.
+    """
+    assert isinstance(_task_broker, InMemoryBroker)
+    return _task_broker
 
 
 # =============================================================================

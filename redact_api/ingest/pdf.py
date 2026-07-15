@@ -43,6 +43,50 @@ class PageExtraction:
     png_bytes: bytes
 
 
+def _open_pdf(pdf_bytes: bytes) -> fitz.Document:
+    """Open a PDF from bytes, mapping any parse failure to ``MalformedPdfError``."""
+    try:
+        return fitz.open(stream=pdf_bytes, filetype="pdf")
+    except (fitz.FileDataError, RuntimeError) as exc:
+        message = "PDF is malformed or corrupt and cannot be opened"
+        raise MalformedPdfError(message) from exc
+
+
+def _check_encryption_and_page_count(doc: fitz.Document) -> None:
+    """Reject an encrypted or over-page-count document before any per-page work."""
+    if doc.needs_pass:
+        raise EncryptedPdfError
+
+    if doc.page_count > MAX_PAGE_COUNT:
+        raise DocumentTooLargeError(limit_kind="page_count", actual=doc.page_count, limit=MAX_PAGE_COUNT)
+
+
+def validate_pdf_structure(pdf_bytes: bytes) -> None:
+    """Run the cheap structural checks only: parse, encryption, page count, text presence.
+
+    No rasterization (never calls ``get_pixmap``) -- this is the fail-fast pre-check that
+    ``POST /jobs`` runs synchronously before enqueuing ``ingest_job``, sharing the exact
+    same rejection taxonomy as the full ``extract_pages``/``ingest_pdf`` path that then
+    runs in the async task. Raises the same four ingest exceptions extraction would.
+
+    Raises:
+        MalformedPdfError: If the PDF cannot be opened/parsed.
+        EncryptedPdfError: If the PDF requires a password.
+        DocumentTooLargeError: If the page count exceeds MAX_PAGE_COUNT.
+        UnsupportedPageError: If one or more pages have no extractable text.
+    """
+    doc = _open_pdf(pdf_bytes)
+    try:
+        _check_encryption_and_page_count(doc)
+        unsupported_page_numbers = [
+            page_index + 1 for page_index in range(doc.page_count) if not doc.load_page(page_index).get_text("words")
+        ]
+        if unsupported_page_numbers:
+            raise UnsupportedPageError(unsupported_page_numbers)
+    finally:
+        doc.close()
+
+
 def extract_pages(pdf_bytes: bytes) -> list[PageExtraction]:
     """Extract the canonical page model for every page of a PDF.
 
@@ -52,12 +96,7 @@ def extract_pages(pdf_bytes: bytes) -> list[PageExtraction]:
         DocumentTooLargeError: If the page count exceeds MAX_PAGE_COUNT.
         UnsupportedPageError: If one or more pages have no extractable text.
     """
-    try:
-        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-    except (fitz.FileDataError, RuntimeError) as exc:
-        message = "PDF is malformed or corrupt and cannot be opened"
-        raise MalformedPdfError(message) from exc
-
+    doc = _open_pdf(pdf_bytes)
     try:
         return _extract_open_document(doc)
     finally:
@@ -65,11 +104,7 @@ def extract_pages(pdf_bytes: bytes) -> list[PageExtraction]:
 
 
 def _extract_open_document(doc: fitz.Document) -> list[PageExtraction]:
-    if doc.needs_pass:
-        raise EncryptedPdfError
-
-    if doc.page_count > MAX_PAGE_COUNT:
-        raise DocumentTooLargeError(limit_kind="page_count", actual=doc.page_count, limit=MAX_PAGE_COUNT)
+    _check_encryption_and_page_count(doc)
 
     extractions: list[PageExtraction] = []
     unsupported_page_numbers: list[int] = []

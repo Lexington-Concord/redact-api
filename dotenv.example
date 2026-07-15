@@ -28,6 +28,14 @@ ACTIVITY_LOGGING_ENABLED=true
 ACTIVITY_LOG_RETENTION_DAYS=90
 
 # =============================================================================
+# Async Task Processing (TaskIQ)
+# =============================================================================
+# RabbitMQ is the task broker; Redis is the TaskIQ result backend. Used by the
+# ingest/detect/apply background tasks and the /health broker-connectivity check.
+# RABBITMQ_URL=amqp://guest:guest@localhost:5672/
+# REDIS_URL=redis://localhost:6379/0
+
+# =============================================================================
 # File Uploads
 # =============================================================================
 MAX_FILE_SIZE_BYTES=52428800  # 50MB in bytes
