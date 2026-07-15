@@ -248,6 +248,12 @@ deployments:
                 port: 8000
               initialDelaySeconds: 10
               periodSeconds: 20
+              # redact-api#8: /health/live only runs the DB check, bounded by
+              # HEALTH_DB_TIMEOUT_SECONDS (2.0s) -- still over Kubernetes' 1s default probe
+              # timeout. This matters even more than the readinessProbe override above: a
+              # liveness failure restarts the pod, killing any in-flight ingest/detect/apply
+              # task, whereas a readiness failure only pulls the pod from rotation.
+              timeoutSeconds: 3
             resources:
               requests:
                 cpu: "100m"

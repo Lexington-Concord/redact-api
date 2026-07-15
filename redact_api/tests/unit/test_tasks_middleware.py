@@ -11,7 +11,7 @@ from collections.abc import Generator
 
 import pytest
 from prometheus_client import Histogram
-from taskiq import TaskiqMessage, TaskiqResult
+from taskiq import InMemoryBroker, TaskiqMessage, TaskiqResult
 
 from redact_api.core.config import settings
 from redact_api.core.logging import _job_id_var, get_job_id, get_logging_context
@@ -21,6 +21,7 @@ from redact_api.core.metrics import (
     tasks_failed_total,
     tasks_in_progress,
 )
+from redact_api.tasks.middleware import register_middleware
 from redact_api.tasks.middleware.job_context import JobContextMiddleware
 from redact_api.tasks.middleware.logging_mw import LoggingMiddleware
 from redact_api.tasks.middleware.metrics_mw import MetricsMiddleware
@@ -48,6 +49,17 @@ def _message(*, kwargs: dict[str, object] | None = None) -> TaskiqMessage:
 
 def _result(*, is_err: bool = False) -> TaskiqResult[None]:
     return TaskiqResult(is_err=is_err, return_value=None, execution_time=0.1, error=None)
+
+
+def _extra(record: logging.LogRecord, field: str) -> object:
+    """Read a field from a LogRecord's ``extra={...}`` dict.
+
+    ``extra`` fields land as plain attributes on the record at emit time, but they are
+    not part of ``logging.LogRecord``'s type stub -- ``getattr`` (rather than direct
+    attribute access) avoids a mypy ``attr-defined`` error on every custom field this
+    test suite asserts on.
+    """
+    return getattr(record, field)
 
 
 class TestJobContextMiddleware:
@@ -155,13 +167,15 @@ class TestLoggingMiddleware:
         await middleware.post_execute(message, _result())
         await middleware.post_execute(message, _result(is_err=True))
 
-    async def test_failed_task_logs_traceback_exactly_once(self, caplog: pytest.LogCaptureFixture) -> None:
+    async def test_failed_task_logs_exception_digest_exactly_once(self, caplog: pytest.LogCaptureFixture) -> None:
         """Regression test for two bugs:
 
-        1. ``on_error`` used to call ``LOGGER.exception(...)``, which relies on
-           ``sys.exc_info()`` -- but TaskIQ's receiver invokes ``on_error`` after its own
-           ``except`` block has already exited, so no traceback was ever actually captured.
-           Passing the exception explicitly via ``exc_info=exception`` fixes this.
+        1. ``on_error`` used to pass ``exc_info=exception`` to ``LOGGER.error(...)``. The
+           ECS formatter (``ecs_logging.StdlibFormatter``) serializes ``exc_info`` into the
+           raw exception message + full traceback -- a PII leak, since this pipeline
+           persists real detected PII (Span.text) and a DB error could echo it. The fix
+           logs only ``exception_type`` (digest-only), matching ``ingest_job.py`` /
+           ``detect_job.py`` / ``apply_job.py``'s pattern -- no ``exc_info`` at all.
         2. TaskIQ's receiver calls BOTH ``on_error`` and ``post_execute`` when a task raises,
            so the old ``post_execute`` (which logged ``task_error`` whenever
            ``result.is_err``) double-logged every failure alongside ``on_error``'s
@@ -191,7 +205,90 @@ class TestLoggingMiddleware:
         assert len(error_records) == 1
         (record,) = error_records
         assert record.message == "task_exception"
-        # A real traceback was captured (not an empty sys.exc_info()).
-        assert record.exc_info is not None
-        assert record.exc_info[1] is exception
+        # Digest-only: no exc_info/traceback attached, but exception_type is present.
+        assert not record.exc_info
+        assert _extra(record, "exception_type") == type(exception).__name__
         assert "task_error" not in [r.message for r in caplog.records]
+
+
+class TestComposedMiddlewarePipeline:
+    """Drives a real ``InMemoryBroker`` with all three middleware attached via
+    ``register_middleware()`` -- the actual production composition -- rather than each
+    middleware in isolation.
+
+    Regression coverage for findings 1 and 3 (round 2): finding 3's registration-order bug
+    only manifests when the middleware run together (``JobContextMiddleware`` must be
+    outermost so ``LoggingMiddleware`` can still read ``job_id`` on the way out), and
+    finding 1's PII leak is only meaningfully caught end to end, through the same log
+    record shape the worker process actually emits.
+    """
+
+    @staticmethod
+    def _reset_logging_mw_logger() -> None:
+        # Why: see test_failed_task_logs_exception_digest_exactly_once -- Alembic's
+        # fileConfig(disable_existing_loggers=True) can disable this module logger once
+        # per test session; reset it so this test is deterministic regardless of suite
+        # ordering.
+        logging.getLogger("redact_api.tasks.middleware.logging_mw").disabled = False
+
+    async def test_via_broker_success_logs_job_id_on_started_and_completed(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        self._reset_logging_mw_logger()
+        broker = InMemoryBroker()
+        register_middleware(broker)
+
+        @broker.task
+        async def _ok_task(job_id: str) -> None:
+            # job_id must be a real parameter (not just `**kwargs`) so `.kiq(job_id=...)`
+            # binds correctly; the middleware pipeline is what this test exercises, not
+            # the task body itself.
+            _ = job_id
+
+        job_id = "job-composed-success"
+        with caplog.at_level(logging.INFO, logger="redact_api.tasks.middleware.logging_mw"):
+            task = await _ok_task.kiq(job_id=job_id)
+            result = await task.wait_result(check_interval=0.01)
+
+        assert not result.is_err
+        started = next(r for r in caplog.records if r.message == "task_started")
+        completed = next(r for r in caplog.records if r.message == "task_completed")
+        assert _extra(started, "job_id") == job_id
+        assert _extra(completed, "job_id") == job_id
+
+    async def test_via_broker_failure_logs_job_id_with_no_raw_exception_content(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        self._reset_logging_mw_logger()
+        broker = InMemoryBroker()
+        register_middleware(broker)
+
+        secret_message = "raw pii span text that must never reach the log record"
+
+        @broker.task
+        async def _failing_task(job_id: str) -> None:
+            _ = job_id  # see _ok_task above -- must be a real bindable parameter
+            raise RuntimeError(secret_message)
+
+        job_id = "job-composed-failure"
+        with caplog.at_level(logging.INFO, logger="redact_api.tasks.middleware.logging_mw"):
+            task = await _failing_task.kiq(job_id=job_id)
+            result = await task.wait_result(check_interval=0.01)
+
+        assert result.is_err
+        started = next(r for r in caplog.records if r.message == "task_started")
+        exc_record = next(r for r in caplog.records if r.message == "task_exception")
+        assert _extra(started, "job_id") == job_id
+        # job_id must still be bound when LoggingMiddleware's on_error runs -- this is
+        # only true because JobContextMiddleware is registered outermost (finding 3).
+        assert _extra(exc_record, "job_id") == job_id
+        assert _extra(exc_record, "exception_type") == "RuntimeError"
+        # Digest-only (finding 1): no exc_info/traceback, and the raw exception message
+        # never appears in our own log record. (TaskIQ's own internal receiver logger
+        # separately logs the raw exception with a full traceback via its own
+        # `logger.error(..., exc_info=True)` call -- that's library-internal behavior
+        # outside this codebase's control and outside this fix's scope; the assertion
+        # here is scoped to the record our LoggingMiddleware itself produced.)
+        assert not exc_record.exc_info
+        assert secret_message not in exc_record.getMessage()
+        assert "task_completed" not in [r.message for r in caplog.records]

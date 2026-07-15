@@ -41,8 +41,8 @@ class TestMiddlewarePipeline:
         fresh: AsyncBroker = InMemoryBroker()
         register_middleware(fresh)
         assert [type(m).__name__ for m in fresh.middlewares] == [
-            LoggingMiddleware.__name__,
             JobContextMiddleware.__name__,
+            LoggingMiddleware.__name__,
             MetricsMiddleware.__name__,
         ]
 
@@ -56,7 +56,7 @@ class TestWorkerEntrypoint:
         assert any(name.endswith("detect_job") for name in task_names)
         assert any(name.endswith("apply_job") for name in task_names)
         assert [type(m).__name__ for m in broker.middlewares] == [
-            LoggingMiddleware.__name__,
             JobContextMiddleware.__name__,
+            LoggingMiddleware.__name__,
             MetricsMiddleware.__name__,
         ]
