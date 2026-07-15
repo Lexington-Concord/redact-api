@@ -181,6 +181,28 @@ class TestApplyJob:
         assert refreshed.status == JobStatus.FAILED
         assert await _count(session_maker, ActivityLog, resource_id=job.id) == 1
 
+    async def test_malformed_reviewer_id_marks_failed_and_reraises(
+        self,
+        session: AsyncSession,
+        session_maker: SessionMaker,
+        make_organization: MakeOrg,
+        make_job: MakeJob,
+        wire_apply: FakeStorageClient,
+    ) -> None:
+        """A reviewer_id that isn't a parseable UUID must route through fail_job, not crash
+        unhandled before the job ever leaves APPLYING (hardening added in the Stage 3 fix loop)."""
+        org = await make_organization()
+        job = await make_job(org, status=JobStatus.APPLYING)
+        await session.commit()
+        wire_apply.uploads[keys.original_pdf_key(job.document_id)] = build_multi_page_pdf(page_count=1)
+
+        with pytest.raises(ValueError, match="badly formed hexadecimal UUID string"):
+            await apply_job(job_id=str(job.id), reviewer_id="not-a-uuid")
+
+        refreshed = await _fetch_job(session_maker, job.id)
+        assert refreshed.status == JobStatus.FAILED
+        assert await _count(session_maker, ActivityLog, resource_id=job.id) == 1
+
     async def test_redelivery_is_noop(
         self,
         session: AsyncSession,

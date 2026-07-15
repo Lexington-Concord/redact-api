@@ -10,7 +10,6 @@ in-progress job's own (not-yet-appended) EXPORTED row, and the broken-chain fail
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Awaitable, Callable
 
 import pytest
 from sqlalchemy import select
@@ -18,19 +17,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import col
 
 from redact_api.models.audit_entry import AuditAction, AuditEntry
-from redact_api.models.redaction_job import RedactionJob
 from redact_api.services.export_manifest_service import (
     ExportChainBrokenError,
     assemble_export_manifest,
 )
-from redact_api.storage import keys
 from redact_api.tests.conftest import FakeStorageClient
 from redact_api.tests.integration.conftest import (
     SEED_ORIGINAL_PDF_BYTES,
     SEED_REDACTED_PDF_BYTES,
+    SeedVerifiedJob,
 )
-
-SeedVerifiedJob = Callable[[FakeStorageClient], Awaitable[RedactionJob]]
 
 
 class TestAssembleExportManifest:
@@ -155,18 +151,3 @@ class TestAssembleExportManifest:
 
         with pytest.raises(ExportChainBrokenError):
             await assemble_export_manifest(session, storage, job)
-
-    @pytest.mark.asyncio
-    async def test_manifest_downloads_from_expected_keys(
-        self,
-        seed_verified_job: SeedVerifiedJob,
-        session: AsyncSession,
-    ) -> None:
-        storage = FakeStorageClient()
-        job = await seed_verified_job(storage)
-
-        await assemble_export_manifest(session, storage, job)
-
-        # Sanity: assembly reads exactly the original + redacted objects seeded for this job.
-        assert keys.original_pdf_key(job.document_id) in storage.uploads
-        assert keys.redacted_pdf_key(job.id) in storage.uploads

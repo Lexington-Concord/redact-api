@@ -16,7 +16,6 @@ from __future__ import annotations
 import io
 import json
 import zipfile
-from collections.abc import Awaitable, Callable
 from http import HTTPStatus
 from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
@@ -45,9 +44,7 @@ from redact_api.tests.fixtures.ingest_pdfs import (
     build_mixed_native_and_image_pdf,
     build_multi_page_pdf,
 )
-from redact_api.tests.integration.conftest import SEED_REDACTED_PDF_BYTES
-
-SeedVerifiedJob = Callable[[FakeStorageClient], Awaitable[RedactionJob]]
+from redact_api.tests.integration.conftest import SEED_REDACTED_PDF_BYTES, SeedVerifiedJob
 
 DEFAULT_ORG_ID = UUID("00000000-0000-0000-0000-000000000000")
 DEFAULT_USER_ID = UUID("00000000-0000-0000-0000-000000000001")

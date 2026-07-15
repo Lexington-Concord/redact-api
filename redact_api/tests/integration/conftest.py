@@ -168,8 +168,11 @@ def add_span(
     return _add
 
 
+SeedVerifiedJob = Callable[[FakeStorageClient], Awaitable[RedactionJob]]
+
+
 @pytest.fixture
-def seed_verified_job(session: AsyncSession) -> Callable[[FakeStorageClient], Awaitable[RedactionJob]]:
+def seed_verified_job(session: AsyncSession) -> SeedVerifiedJob:
     """Seed a committed VERIFIED job whose audit chain and stored PDFs an export can consume.
 
     Builds, in ``sequence`` order: one span-level APPROVED entry, one job-level APPLY_STARTED
