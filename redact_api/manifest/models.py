@@ -5,9 +5,12 @@ fresh at export time from the live hash chain and shipped inside the export zip 
 ``redacted.pdf``. Like ``AuditEntry`` it carries only category labels and SHA-256 digests --
 never raw span text -- so it can be stored or forwarded without re-leaking redacted PII.
 
-This is a pure Pydantic contract module: it has zero database, session, or storage imports,
-mirroring ``redact_api.redaction.models``. Assembly (downloading/hashing PDF bytes, querying
-the chain) lives in ``redact_api.services.export_manifest_service``.
+This is a pure Pydantic contract module: it performs no database, session, or storage I/O of
+its own, mirroring ``redact_api.redaction.models``'s intent. It imports the shared ``AuditAction``
+enum from ``redact_api.models.audit_entry`` for type fidelity with the audit trail it describes;
+that import transitively pulls in SQLModel/SQLAlchemy as a dependency of the models package, but
+this module never opens a session or issues a query. Assembly (downloading/hashing PDF bytes,
+querying the chain) lives in ``redact_api.services.export_manifest_service``.
 
 V1 scope (R9): No retention policy and no cryptographic signing in V1 -- the hash chain
 provides tamper-EVIDENCE only, not tamper-proofness or non-repudiation.

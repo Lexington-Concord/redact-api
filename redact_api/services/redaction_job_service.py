@@ -15,6 +15,7 @@ import hashlib
 import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import Protocol
 from uuid import UUID
 
 from sqlalchemy import func, select
@@ -85,6 +86,41 @@ def compute_entry_hash(prev_hash: str, payload: dict[str, str | None]) -> str:
     """Chain hash: SHA-256 of ``prev_hash`` concatenated with the canonical JSON payload."""
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return _hash_hex(prev_hash + canonical)
+
+
+class _ChainPayloadSource(Protocol):
+    """Structural shape shared by ``AuditEntryInput`` and ``AuditEntry`` for payload building.
+
+    Declared via read-only properties so both a frozen dataclass (``AuditEntryInput``) and a
+    SQLModel table row (``AuditEntry``) satisfy it structurally -- only reading these fields.
+    """
+
+    @property
+    def action(self) -> AuditAction: ...
+    @property
+    def category(self) -> str: ...
+    @property
+    def reviewer_id(self) -> UUID: ...
+    @property
+    def span_id(self) -> UUID | None: ...
+
+
+def _chain_payload(source: _ChainPayloadSource, *, job_id: UUID, created_at: datetime) -> dict[str, str | None]:
+    """Build the pinned 6-key hashed payload (resolution #6) -- do not add or remove keys.
+
+    Single source of truth for both the write path (``append_audit_entry``, building from a
+    caller-supplied ``AuditEntryInput``) and the read path (``verify_audit_chain``, rebuilding
+    from a persisted ``AuditEntry`` row), so the two can never silently drift apart. ``source``
+    accepts either shape structurally -- both expose action/category/reviewer_id/span_id.
+    """
+    return {
+        "job_id": str(job_id),
+        "span_id": str(source.span_id) if source.span_id is not None else None,
+        "action": source.action.value,
+        "category": source.category,
+        "reviewer": str(source.reviewer_id),
+        "created_at": created_at.isoformat(),
+    }
 
 
 async def _count_undispositioned_spans(session: AsyncSession, document_id: UUID) -> int:
@@ -166,16 +202,8 @@ async def append_audit_entry(
     # for created_at, but here the exact persisted value must also be hashed into the
     # payload below -- so it's generated in Python and passed through explicitly instead.
     created_at = datetime.now(UTC)
-    # Pinned 6-key payload (resolution #6) -- do not add or remove keys. text_hash is
-    # stored on the row but deliberately excluded from the hashed payload.
-    payload: dict[str, str | None] = {
-        "job_id": str(job_id),
-        "span_id": str(event.span_id) if event.span_id is not None else None,
-        "action": event.action.value,
-        "category": event.category,
-        "reviewer": str(event.reviewer_id),
-        "created_at": created_at.isoformat(),
-    }
+    # text_hash is stored on the row but deliberately excluded from the hashed payload.
+    payload = _chain_payload(event, job_id=job_id, created_at=created_at)
     entry_hash = compute_entry_hash(prev_hash, payload)
 
     entry = AuditEntry(
@@ -197,15 +225,8 @@ async def append_audit_entry(
 
 
 def _entry_payload(entry: AuditEntry) -> dict[str, str | None]:
-    """Rebuild the pinned 6-key hashed payload for ``entry`` (must match ``append_audit_entry``)."""
-    return {
-        "job_id": str(entry.job_id),
-        "span_id": str(entry.span_id) if entry.span_id is not None else None,
-        "action": entry.action.value,
-        "category": entry.category,
-        "reviewer": str(entry.reviewer_id),
-        "created_at": entry.created_at.isoformat(),
-    }
+    """Rebuild the pinned 6-key hashed payload for a persisted ``entry`` via ``_chain_payload``."""
+    return _chain_payload(entry, job_id=entry.job_id, created_at=entry.created_at)
 
 
 @dataclass(frozen=True, kw_only=True)

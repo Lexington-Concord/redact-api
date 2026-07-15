@@ -539,6 +539,13 @@ class TestExport:
         assert manifest["job_id"] == str(job.id)
         assert manifest["audit_chain_verified"] is True
 
+        # R4: the canonical manifest is also persisted to storage, not just bundled in the
+        # zip response -- distinct assertion from the zip member above (same bytes, separate
+        # object key).
+        persisted_manifest_key = keys.export_manifest_key(job.id)
+        assert persisted_manifest_key in fake_storage_client.uploads
+        assert fake_storage_client.uploads[persisted_manifest_key] == members["manifest.json"]
+
         refreshed = await _fetch_job(session_maker, job.id)
         assert refreshed.status == JobStatus.EXPORTED
 

@@ -59,7 +59,6 @@ async def apply_job(job_id: str, reviewer_id: str) -> None:
     lifecycle audit entries (APPLY_STARTED / VERIFY_PASSED / VERIFY_FAILED) attribute to the same
     reviewer who requested the apply.
     """
-    reviewer = UUID(reviewer_id)
     async with db_session.async_session_maker() as session:
         job = await load_job(session, UUID(job_id))
         if job is None or job.status is not JobStatus.APPLYING:
@@ -68,6 +67,10 @@ async def apply_job(job_id: str, reviewer_id: str) -> None:
 
         storage = build_storage_client()
         try:
+            # Parsed inside the try so a malformed reviewer_id routes through the same
+            # fail_job/log_job_terminal path as any other apply-time failure below, instead of
+            # raising unhandled before the job is ever moved out of APPLYING.
+            reviewer = UUID(reviewer_id)
             original_bytes = await storage.download_bytes(keys.original_pdf_key(job.document_id))
             approved_spans = await project_approved_spans(session, job)
 

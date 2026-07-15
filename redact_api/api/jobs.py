@@ -61,6 +61,7 @@ router = APIRouter(prefix="/jobs", tags=["jobs"])
 
 _PDF_CONTENT_TYPE = "application/pdf"
 _ZIP_CONTENT_TYPE = "application/zip"
+_MANIFEST_CONTENT_TYPE = "application/json"
 _EXPORT_PDF_MEMBER = "redacted.pdf"
 _EXPORT_MANIFEST_MEMBER = "manifest.json"
 
@@ -265,22 +266,26 @@ async def export_job(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=missing_artifact_msg)
 
     # Gate on chain integrity before touching any PDF bytes: a tampered audit trail must not
-    # yield an export bundle.
+    # yield an export bundle. The verified ChainVerifyResult is passed into
+    # assemble_export_manifest below so it isn't recomputed a second time.
     chain = await verify_audit_chain(session, job.id)
     if not chain.verified:
         broken_chain_msg = "Audit chain failed verification; export blocked"
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=broken_chain_msg)
 
+    # Downloaded once here (after the chain gate) and reused for both hashing (inside
+    # assemble_export_manifest) and the zip bundle below, instead of fetching the same object twice.
+    pdf_bytes = await storage.download_bytes(job.redacted_pdf_key)
+
     try:
-        manifest = await assemble_export_manifest(session, storage, job)
+        manifest = await assemble_export_manifest(session, storage, job, chain=chain, redacted_bytes=pdf_bytes)
     except ExportChainBrokenError as error:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
 
     manifest_bytes = manifest.model_dump_json().encode("utf-8")
-    pdf_bytes = await storage.download_bytes(job.redacted_pdf_key)
     zip_bytes = _build_export_zip(pdf_bytes, manifest_bytes)
     # Persist the canonical manifest alongside the redacted artifact (idempotent overwrite).
-    await storage.upload_bytes(keys.export_manifest_key(job.id), manifest_bytes, content_type="application/json")
+    await storage.upload_bytes(keys.export_manifest_key(job.id), manifest_bytes, content_type=_MANIFEST_CONTENT_TYPE)
 
     if job.status is JobStatus.VERIFIED:
         # EXPORTED audit entry + transition fire exactly once, only on the first export; the

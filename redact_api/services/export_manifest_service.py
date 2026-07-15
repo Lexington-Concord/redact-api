@@ -26,7 +26,7 @@ from redact_api.manifest.models import (
 )
 from redact_api.models.audit_entry import AuditAction, AuditEntry
 from redact_api.models.redaction_job import RedactionJob
-from redact_api.services.redaction_job_service import verify_audit_chain
+from redact_api.services.redaction_job_service import ChainVerifyResult, verify_audit_chain
 from redact_api.storage import keys
 from redact_api.storage.client import StorageClient
 
@@ -46,14 +46,23 @@ async def assemble_export_manifest(
     session: AsyncSession,
     storage: StorageClient,
     job: RedactionJob,
+    *,
+    chain: ChainVerifyResult | None = None,
+    redacted_bytes: bytes | None = None,
 ) -> ExportManifest:
     """Assemble the ``ExportManifest`` for ``job`` from its live audit chain and stored PDFs.
 
     Verifies the audit chain first and raises ``ExportChainBrokenError`` before any PDF bytes
     are downloaded if it is broken. Requires ``job.redacted_pdf_key`` to be set (the export
     endpoint guarantees this for a VERIFIED/EXPORTED job).
+
+    ``chain`` and ``redacted_bytes`` let a caller that already verified the chain / downloaded
+    the redacted PDF for its own purposes (the export endpoint does both, to build the zip
+    bundle) pass them through instead of this function repeating the same chain walk or
+    object-storage fetch. Callers that don't have either on hand -- e.g. direct unit/integration
+    tests -- omit both and this function computes them itself, exactly as before.
     """
-    chain = await verify_audit_chain(session, job.id)
+    chain = chain if chain is not None else await verify_audit_chain(session, job.id)
     if not chain.verified:
         msg = f"Audit chain for job {job.id} failed verification (first broken: {chain.first_broken_entry_id})"
         raise ExportChainBrokenError(msg)
@@ -63,7 +72,8 @@ async def assemble_export_manifest(
         raise ExportChainBrokenError(msg)
 
     original_bytes = await storage.download_bytes(keys.original_pdf_key(job.document_id))
-    redacted_bytes = await storage.download_bytes(job.redacted_pdf_key)
+    if redacted_bytes is None:
+        redacted_bytes = await storage.download_bytes(job.redacted_pdf_key)
 
     stmt = select(AuditEntry).where(col(AuditEntry.job_id) == job.id).order_by(col(AuditEntry.sequence))
     entries = list((await session.execute(stmt)).scalars().all())
