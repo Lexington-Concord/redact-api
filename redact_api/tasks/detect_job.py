@@ -39,6 +39,9 @@ async def detect_job(job_id: str) -> None:
             pages = [extraction.page for extraction in extract_pages(pdf_bytes)]
             await run_detection(session, job.document_id, pages)
             await transition_job_status(session, job, JobStatus.DETECTED)
+            # Why: land at IN_REVIEW and stop here -- apply_job is enqueued only by the
+            # disposition-gated POST /jobs/{id}/apply endpoint, never automatically. A
+            # human must review and disposition spans before the irreversible burn-in runs.
             await transition_job_status(session, job, JobStatus.IN_REVIEW)
             await session.commit()
         except Exception:

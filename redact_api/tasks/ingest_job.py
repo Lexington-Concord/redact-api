@@ -53,6 +53,13 @@ async def ingest_job(job_id: str) -> None:
             if failed is not None:
                 await log_job_terminal(failed, JobStatus.FAILED)
             return
+        except Exception:
+            LOGGER.exception("ingest_job_failed", extra={"job_id": job_id})
+            await session.rollback()
+            failed = await fail_job(UUID(job_id))
+            if failed is not None:
+                await log_job_terminal(failed, JobStatus.FAILED)
+            raise
 
         await log_job_terminal(job, JobStatus.INGESTED)
 
