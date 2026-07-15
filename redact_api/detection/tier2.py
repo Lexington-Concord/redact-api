@@ -143,9 +143,7 @@ def detect_entities_batch(pages: list[PageModel]) -> list[list[CandidateSpan]]:
         return []
     analyzer = _get_batch_analyzer()
     texts = [page.text for page in pages]
-    results_per_page = analyzer.analyze_iterator(
-        texts, language=_PRESIDIO_LANGUAGE, entities=list(_PRESIDIO_ENTITIES)
-    )
+    results_per_page = analyzer.analyze_iterator(texts, language=_PRESIDIO_LANGUAGE, entities=list(_PRESIDIO_ENTITIES))
     return [_page_spans(page, results) for page, results in zip(pages, results_per_page, strict=True)]
 
 
