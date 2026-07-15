@@ -13,6 +13,10 @@ sessions observe them); post-request state is asserted through a *fresh* session
 
 from __future__ import annotations
 
+import io
+import json
+import zipfile
+from collections.abc import Awaitable, Callable
 from http import HTTPStatus
 from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
@@ -22,7 +26,7 @@ from httpx import AsyncClient
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from redact_api.models.audit_entry import AuditEntry
+from redact_api.models.audit_entry import AuditAction, AuditEntry
 from redact_api.models.disposition import Disposition, DispositionAction
 from redact_api.models.document import Document
 from redact_api.models.membership import Membership, MembershipRole
@@ -41,6 +45,9 @@ from redact_api.tests.fixtures.ingest_pdfs import (
     build_mixed_native_and_image_pdf,
     build_multi_page_pdf,
 )
+from redact_api.tests.integration.conftest import SEED_REDACTED_PDF_BYTES
+
+SeedVerifiedJob = Callable[[FakeStorageClient], Awaitable[RedactionJob]]
 
 DEFAULT_ORG_ID = UUID("00000000-0000-0000-0000-000000000000")
 DEFAULT_USER_ID = UUID("00000000-0000-0000-0000-000000000001")
@@ -453,7 +460,7 @@ class TestApply:
         assert response.status_code == HTTPStatus.OK
         # The burn-in + verify now run async in apply_job; the endpoint lands the job at APPLYING.
         assert response.json()["status"] == JobStatus.APPLYING.value
-        stub_task_enqueue["apply"].assert_awaited_once_with(job_id=str(job.id))
+        stub_task_enqueue["apply"].assert_awaited_once_with(job_id=str(job.id), reviewer_id=str(DEFAULT_USER_ID))
 
         refreshed = await _fetch_job(session_maker, job.id)
         assert refreshed.status == JobStatus.APPLYING
@@ -504,54 +511,128 @@ class TestApply:
 # --------------------------------------------------------------------------- export
 
 
-class TestExport:
-    @staticmethod
-    async def _seed_verified(session: AsyncSession, fake_storage_client: FakeStorageClient) -> RedactionJob:
-        job = await _seed_job(session, status=JobStatus.VERIFIED)
-        redacted_key = keys.redacted_pdf_key(job.id)
-        job.redacted_pdf_key = redacted_key
-        session.add(job)
-        await session.commit()
-        fake_storage_client.uploads[redacted_key] = b"%PDF-redacted"
-        return job
+def _zip_members(content: bytes) -> dict[str, bytes]:
+    """Return the ``{name: bytes}`` map of an export zip's members."""
+    with zipfile.ZipFile(io.BytesIO(content)) as archive:
+        return {name: archive.read(name) for name in archive.namelist()}
 
+
+class TestExport:
     @pytest.mark.asyncio
-    async def test_export_returns_pdf_and_transitions(
+    async def test_export_returns_zip_bundle_and_transitions(
         self,
         client: AsyncClient,
-        session: AsyncSession,
         session_maker: SessionMaker,
         fake_storage_client: FakeStorageClient,
+        seed_verified_job: SeedVerifiedJob,
     ) -> None:
-        job = await self._seed_verified(session, fake_storage_client)
+        job = await seed_verified_job(fake_storage_client)
 
         response = await client.get(f"/jobs/{job.id}/export")
         assert response.status_code == HTTPStatus.OK
-        assert response.headers["content-type"] == "application/pdf"
-        assert response.content == b"%PDF-redacted"
+        assert response.headers["content-type"] == "application/zip"
+        assert response.headers["content-disposition"] == f'attachment; filename="job-{job.id}-export.zip"'
+
+        members = _zip_members(response.content)
+        assert members["redacted.pdf"] == SEED_REDACTED_PDF_BYTES
+        manifest = json.loads(members["manifest.json"])
+        assert manifest["job_id"] == str(job.id)
+        assert manifest["audit_chain_verified"] is True
 
         refreshed = await _fetch_job(session_maker, job.id)
         assert refreshed.status == JobStatus.EXPORTED
 
     @pytest.mark.asyncio
-    async def test_export_idempotent_reread(
+    async def test_export_appends_exactly_one_exported_entry_across_rereads(
         self,
         client: AsyncClient,
-        session: AsyncSession,
         session_maker: SessionMaker,
         fake_storage_client: FakeStorageClient,
+        seed_verified_job: SeedVerifiedJob,
     ) -> None:
-        job = await self._seed_verified(session, fake_storage_client)
+        job = await seed_verified_job(fake_storage_client)
 
         first = await client.get(f"/jobs/{job.id}/export")
         second = await client.get(f"/jobs/{job.id}/export")
         assert first.status_code == HTTPStatus.OK
         assert second.status_code == HTTPStatus.OK
-        assert second.content == b"%PDF-redacted"
 
-        # No re-transition to a different status after the second (already-EXPORTED) call.
+        # The audit-append is gated once; the re-read of an already-EXPORTED job does not
+        # append a second EXPORTED row.
+        assert await _count(session_maker, AuditEntry, job_id=job.id, action=AuditAction.EXPORTED) == 1
         refreshed = await _fetch_job(session_maker, job.id)
         assert refreshed.status == JobStatus.EXPORTED
+
+    @pytest.mark.asyncio
+    async def test_reread_still_assembles_manifest_and_zip(
+        self,
+        client: AsyncClient,
+        fake_storage_client: FakeStorageClient,
+        seed_verified_job: SeedVerifiedJob,
+    ) -> None:
+        job = await seed_verified_job(fake_storage_client)
+
+        await client.get(f"/jobs/{job.id}/export")
+        second = await client.get(f"/jobs/{job.id}/export")
+
+        # Chain-verify + manifest assembly run on every GET, including this re-read: the
+        # second response is a full zip bundle, not a skipped/cached artifact. The re-read's
+        # manifest reflects live chain state, so the now-present EXPORTED row appears in it.
+        members = _zip_members(second.content)
+        assert members["redacted.pdf"] == SEED_REDACTED_PDF_BYTES
+        manifest = json.loads(members["manifest.json"])
+        exported_actions = [event["action"] for event in manifest["lifecycle_events"]]
+        assert AuditAction.EXPORTED.value in exported_actions
+
+    @pytest.mark.asyncio
+    async def test_export_exported_entry_reviewer_is_tenant_user(
+        self,
+        client: AsyncClient,
+        session_maker: SessionMaker,
+        fake_storage_client: FakeStorageClient,
+        seed_verified_job: SeedVerifiedJob,
+    ) -> None:
+        job = await seed_verified_job(fake_storage_client)
+
+        await client.get(f"/jobs/{job.id}/export")
+
+        async with session_maker() as check:
+            exported = (
+                await check.execute(
+                    select(AuditEntry).where(
+                        AuditEntry.job_id == job.id,
+                        AuditEntry.action == AuditAction.EXPORTED,
+                    )
+                )
+            ).scalar_one()
+        assert exported.reviewer_id == DEFAULT_USER_ID
+
+    @pytest.mark.asyncio
+    async def test_export_broken_chain_409_no_exported_entry(
+        self,
+        client: AsyncClient,
+        session_maker: SessionMaker,
+        fake_storage_client: FakeStorageClient,
+        seed_verified_job: SeedVerifiedJob,
+    ) -> None:
+        job = await seed_verified_job(fake_storage_client)
+        # Tamper the first chain entry so verification fails before any bytes are served.
+        async with session_maker() as tamper:
+            entry = (
+                await tamper.execute(
+                    select(AuditEntry).where(AuditEntry.job_id == job.id).order_by(AuditEntry.sequence).limit(1)
+                )
+            ).scalar_one()
+            entry.entry_hash = "0" * 64
+            tamper.add(entry)
+            await tamper.commit()
+
+        response = await client.get(f"/jobs/{job.id}/export")
+        assert response.status_code == HTTPStatus.CONFLICT
+
+        assert await _count(session_maker, AuditEntry, job_id=job.id, action=AuditAction.EXPORTED) == 0
+        refreshed = await _fetch_job(session_maker, job.id)
+        assert refreshed.status == JobStatus.VERIFIED
 
     @pytest.mark.asyncio
     async def test_export_before_verified_409(self, client: AsyncClient, session: AsyncSession) -> None:
@@ -563,9 +644,13 @@ class TestExport:
 
     @pytest.mark.asyncio
     async def test_export_member_forbidden(
-        self, client: AsyncClient, session: AsyncSession, fake_storage_client: FakeStorageClient
+        self,
+        client: AsyncClient,
+        session: AsyncSession,
+        fake_storage_client: FakeStorageClient,
+        seed_verified_job: SeedVerifiedJob,
     ) -> None:
-        job = await self._seed_verified(session, fake_storage_client)
+        job = await seed_verified_job(fake_storage_client)
         member = await _seed_member_user(session)
 
         response = await client.get(f"/jobs/{job.id}/export", headers=_member_headers(member.id))

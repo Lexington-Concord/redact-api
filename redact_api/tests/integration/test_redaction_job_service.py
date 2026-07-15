@@ -25,12 +25,15 @@ from redact_api.models.span import Span
 from redact_api.models.user import User
 from redact_api.services.redaction_job_service import (
     GENESIS_PREV_HASH,
+    JOB_LIFECYCLE_CATEGORY,
     VALID_TRANSITIONS,
     AuditEntryInput,
     InvalidStateTransitionError,
     UndispositionedSpansError,
     append_audit_entry,
+    compute_entry_hash,
     transition_job_status,
+    verify_audit_chain,
 )
 
 LINEAR_CHAIN = [
@@ -332,3 +335,143 @@ class TestAuditHashChain:
                 AuditEntryInput(action=action, category="PERSON", text="John Doe", reviewer_id=user.id),
             )
             assert entry.action == action
+
+    @pytest.mark.asyncio
+    async def test_job_level_entry_stores_null_text_hash(
+        self,
+        session: AsyncSession,
+        make_org_user: MakeOrgUser,
+        make_job: MakeJob,
+    ) -> None:
+        """A job-level lifecycle entry (``text=None``) persists a NULL text_hash, not a digest."""
+        org, user = await make_org_user()
+        job = await make_job(org)
+        entry = await append_audit_entry(
+            session,
+            job.id,
+            AuditEntryInput(
+                action=AuditAction.APPLY_STARTED,
+                category=JOB_LIFECYCLE_CATEGORY,
+                text=None,
+                reviewer_id=user.id,
+            ),
+        )
+        assert entry.text_hash is None
+        # The pinned 6-key payload never included text_hash, so a NULL digest must not
+        # perturb the chain: the entry_hash still recomputes from the golden formula.
+        assert entry.entry_hash == _expected_entry_hash(entry)
+
+    @pytest.mark.asyncio
+    async def test_null_and_hashed_entries_chain_together(
+        self,
+        session: AsyncSession,
+        make_org_user: MakeOrgUser,
+        make_job: MakeJob,
+    ) -> None:
+        """A NULL-text_hash job-level entry chains cleanly after a span-level hashed entry."""
+        org, user = await make_org_user()
+        job = await make_job(org)
+        first = await append_audit_entry(
+            session,
+            job.id,
+            AuditEntryInput(action=AuditAction.APPROVED, category="PERSON", text="John Doe", reviewer_id=user.id),
+        )
+        second = await append_audit_entry(
+            session,
+            job.id,
+            AuditEntryInput(
+                action=AuditAction.VERIFY_PASSED,
+                category='{"verdict":"pass","checks":[]}',
+                text=None,
+                reviewer_id=user.id,
+            ),
+        )
+        assert first.text_hash is not None
+        assert second.text_hash is None
+        assert second.prev_hash == first.entry_hash
+
+
+class TestComputeEntryHash:
+    """The pinned 6-key chain formula (resolution #6) is stable and deterministic."""
+
+    def test_matches_golden_formula(self) -> None:
+        payload: dict[str, str | None] = {
+            "job_id": "11111111-1111-1111-1111-111111111111",
+            "span_id": None,
+            "action": AuditAction.APPLY_STARTED.value,
+            "category": JOB_LIFECYCLE_CATEGORY,
+            "reviewer": "22222222-2222-2222-2222-222222222222",
+            "created_at": "2026-07-15T12:00:00+00:00",
+        }
+        canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        expected = hashlib.sha256((GENESIS_PREV_HASH + canonical).encode("utf-8")).hexdigest()
+        assert compute_entry_hash(GENESIS_PREV_HASH, payload) == expected
+
+    def test_deterministic(self) -> None:
+        payload: dict[str, str | None] = {"job_id": "x", "span_id": None, "action": "a"}
+        assert compute_entry_hash(GENESIS_PREV_HASH, payload) == compute_entry_hash(GENESIS_PREV_HASH, payload)
+
+
+class TestVerifyAuditChain:
+    """Chain-verification service used by export to gate on an intact hash chain."""
+
+    @pytest.mark.asyncio
+    async def test_intact_chain_verifies(
+        self,
+        session: AsyncSession,
+        make_org_user: MakeOrgUser,
+        make_job: MakeJob,
+    ) -> None:
+        org, user = await make_org_user()
+        job = await make_job(org)
+        for _ in range(3):
+            await append_audit_entry(
+                session,
+                job.id,
+                AuditEntryInput(action=AuditAction.APPROVED, category="PERSON", text="John Doe", reviewer_id=user.id),
+            )
+        result = await verify_audit_chain(session, job.id)
+        assert result.verified is True
+        assert result.entry_count == 3
+        assert result.first_broken_entry_id is None
+        assert len(result.head) == 64
+
+    @pytest.mark.asyncio
+    async def test_tampered_chain_reports_first_broken_entry(
+        self,
+        session: AsyncSession,
+        make_org_user: MakeOrgUser,
+        make_job: MakeJob,
+    ) -> None:
+        org, user = await make_org_user()
+        job = await make_job(org)
+        entries = [
+            await append_audit_entry(
+                session,
+                job.id,
+                AuditEntryInput(action=AuditAction.APPROVED, category="PERSON", text="John Doe", reviewer_id=user.id),
+            )
+            for _ in range(3)
+        ]
+        # Tamper with the middle entry's stored digest.
+        entries[1].entry_hash = "0" * 64
+        session.add(entries[1])
+        await session.flush()  # type: ignore[attr-defined]
+
+        result = await verify_audit_chain(session, job.id)
+        assert result.verified is False
+        assert result.first_broken_entry_id == entries[1].id
+
+    @pytest.mark.asyncio
+    async def test_empty_chain_verifies_vacuously(
+        self,
+        session: AsyncSession,
+        make_org_user: MakeOrgUser,
+        make_job: MakeJob,
+    ) -> None:
+        org, _ = await make_org_user()
+        job = await make_job(org)
+        result = await verify_audit_chain(session, job.id)
+        assert result.verified is True
+        assert result.entry_count == 0
+        assert result.first_broken_entry_id is None
