@@ -43,7 +43,10 @@ def _lifecycle_event(action: AuditAction) -> ManifestLifecycleEvent:
 
 def _manifest(*, lifecycle_events: list[ManifestLifecycleEvent] | None = None) -> ExportManifest:
     events = [_lifecycle_event(AuditAction.APPLY_STARTED)] if lifecycle_events is None else lifecycle_events
-    summary = {"verdict": "pass", "checks": [{"check_type": "text_layer", "passed": True, "pages_checked": 1}]}
+    summary: dict[str, object] = {
+        "verdict": "pass",
+        "checks": [{"check_type": "text_layer", "passed": True, "pages_checked": 1}],
+    }
     return ExportManifest(
         job_id=JOB_ID,
         document_id=DOCUMENT_ID,
@@ -98,18 +101,20 @@ class TestCanonicalJson:
 class TestNoRawText:
     def test_text_hash_is_a_digest_not_raw_text(self) -> None:
         raw = "John Doe"
+        digest = hashlib.sha256(raw.encode()).hexdigest()
         disposition = ManifestDisposition(
             span_id=SPAN_ID,
             action=AuditAction.APPROVED,
             category="PERSON",
-            text_hash=hashlib.sha256(raw.encode()).hexdigest(),
+            text_hash=digest,
             reviewer_id=REVIEWER_ID,
             sequence=1,
             created_at=FIXED_TS,
         )
+        assert disposition.text_hash == digest
         assert disposition.text_hash != raw
-        assert len(disposition.text_hash) == 64
-        assert int(disposition.text_hash, 16) >= 0  # valid hex
+        assert len(digest) == 64
+        assert int(digest, 16) >= 0  # valid hex
 
     def test_text_hash_may_be_none_for_lifecycle_style_rows(self) -> None:
         disposition = ManifestDisposition(

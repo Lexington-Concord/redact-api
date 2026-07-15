@@ -268,6 +268,7 @@ class TestAuditHashChain:
         )
         assert "text" not in type(entry).model_fields
         assert entry.category == "PERSON"
+        assert entry.text_hash is not None  # a span-level entry always carries a digest
         assert len(entry.text_hash) == 64
         assert entry.text_hash != raw
         assert int(entry.text_hash, 16) >= 0  # valid hex

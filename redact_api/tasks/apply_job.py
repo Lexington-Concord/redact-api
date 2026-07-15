@@ -10,14 +10,22 @@ re-raises as a task failure.
 
 from __future__ import annotations
 
+import json
 import logging
 from uuid import UUID
 
 from redact_api.db import session as db_session
+from redact_api.models.audit_entry import AuditAction
 from redact_api.models.redaction_job import JobStatus
 from redact_api.redaction.apply import apply
+from redact_api.redaction.models import ApplyResult
 from redact_api.services.jobs_service import project_approved_spans
-from redact_api.services.redaction_job_service import transition_job_status
+from redact_api.services.redaction_job_service import (
+    JOB_LIFECYCLE_CATEGORY,
+    AuditEntryInput,
+    append_audit_entry,
+    transition_job_status,
+)
 from redact_api.storage import keys
 from redact_api.tasks.broker import broker
 from redact_api.tasks.support import build_storage_client, fail_job, load_job, log_job_terminal
@@ -27,9 +35,31 @@ LOGGER = logging.getLogger(__name__)
 _PDF_CONTENT_TYPE = "application/pdf"
 
 
+def _verify_verdict_category(result: ApplyResult) -> str:
+    """Encode the verify gate's digest-only verdict blob as canonical JSON for the audit row.
+
+    Carries only the verdict plus per-check summaries (type/passed/pages_checked) -- never the
+    raw redacted strings, matching the audit trail's no-PII invariant.
+    """
+    summary = {
+        "verdict": result.verify_result.verdict.value,
+        "checks": [
+            {"check_type": check.check_type.value, "passed": check.passed, "pages_checked": check.pages_checked}
+            for check in result.verify_result.checks
+        ],
+    }
+    return json.dumps(summary, sort_keys=True, separators=(",", ":"))
+
+
 @broker.task
-async def apply_job(job_id: str) -> None:
-    """Burn approved spans into a job's PDF, gate through verify, and land VERIFIED/FAILED."""
+async def apply_job(job_id: str, reviewer_id: str) -> None:
+    """Burn approved spans into a job's PDF, gate through verify, and land VERIFIED/FAILED.
+
+    ``reviewer_id`` is threaded from the apply endpoint's authenticated tenant so the task-layer
+    lifecycle audit entries (APPLY_STARTED / VERIFY_PASSED / VERIFY_FAILED) attribute to the same
+    reviewer who requested the apply.
+    """
+    reviewer = UUID(reviewer_id)
     async with db_session.async_session_maker() as session:
         job = await load_job(session, UUID(job_id))
         if job is None or job.status is not JobStatus.APPLYING:
@@ -40,6 +70,19 @@ async def apply_job(job_id: str) -> None:
         try:
             original_bytes = await storage.download_bytes(keys.original_pdf_key(job.document_id))
             approved_spans = await project_approved_spans(session, job)
+
+            # APPLY_STARTED marks the irreversible burn-in beginning; text=None (job-level event).
+            await append_audit_entry(
+                session,
+                job.id,
+                AuditEntryInput(
+                    action=AuditAction.APPLY_STARTED,
+                    category=JOB_LIFECYCLE_CATEGORY,
+                    text=None,
+                    reviewer_id=reviewer,
+                ),
+            )
+
             result = apply(original_bytes, approved_spans)
 
             if not result.passed:
@@ -54,11 +97,31 @@ async def apply_job(job_id: str) -> None:
                         "finding_count": len(result.verify_result.findings),
                     },
                 )
+                await append_audit_entry(
+                    session,
+                    job.id,
+                    AuditEntryInput(
+                        action=AuditAction.VERIFY_FAILED,
+                        category=_verify_verdict_category(result),
+                        text=None,
+                        reviewer_id=reviewer,
+                    ),
+                )
                 await transition_job_status(session, job, JobStatus.FAILED)
                 await session.commit()
                 await log_job_terminal(job, JobStatus.FAILED)
                 return
 
+            await append_audit_entry(
+                session,
+                job.id,
+                AuditEntryInput(
+                    action=AuditAction.VERIFY_PASSED,
+                    category=_verify_verdict_category(result),
+                    text=None,
+                    reviewer_id=reviewer,
+                ),
+            )
             redacted_key = keys.redacted_pdf_key(job.id)
             await storage.upload_bytes(redacted_key, result.pdf_bytes, content_type=_PDF_CONTENT_TYPE)
             job.redacted_pdf_key = redacted_key

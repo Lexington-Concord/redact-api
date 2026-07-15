@@ -31,6 +31,11 @@ from redact_api.redaction.verify_gate import normalize_text
 # Genesis link for the first audit entry of a job (64 zero hex chars).
 GENESIS_PREV_HASH = "0" * 64
 
+# Category label for job-level lifecycle audit entries that are not tied to a PII span
+# (APPLY_STARTED / EXPORTED). VERIFY_PASSED / VERIFY_FAILED instead JSON-encode a digest-only
+# verdict blob into ``category`` -- see ``apply_job``.
+JOB_LIFECYCLE_CATEGORY = "job_lifecycle"
+
 # Allowed job-status transitions. The happy path is the linear detection->export chain;
 # any non-terminal state may also fail. FAILED and EXPORTED are terminal (empty sets) --
 # there is deliberately no retry edge in V1 (deviation from minutes-shared's pipeline).
@@ -59,12 +64,14 @@ class AuditEntryInput:
     """Caller-supplied content for an audit entry.
 
     ``text`` is the raw span text used only to compute the stored digest; it is never
-    persisted. ``organization_id`` is intentionally absent -- it is sourced from the job.
+    persisted. It is ``None`` for job-level lifecycle events (APPLY_STARTED / VERIFY_* /
+    EXPORTED), which carry no span text -- those entries persist a NULL ``text_hash``.
+    ``organization_id`` is intentionally absent -- it is sourced from the job.
     """
 
     action: AuditAction
     category: str
-    text: str
+    text: str | None
     reviewer_id: UUID
     span_id: UUID | None = None
 
@@ -152,7 +159,9 @@ async def append_audit_entry(
         raise LookupError(msg)
 
     prev_hash, sequence = await _next_chain_link(session, job_id)
-    text_hash = _hash_hex(normalize_text(event.text))
+    # Job-level lifecycle events carry no span text, so they store a NULL digest. text_hash
+    # was never part of the pinned hashed payload, so this branch does not perturb the chain.
+    text_hash = _hash_hex(normalize_text(event.text)) if event.text is not None else None
     # Why: every other TimestampedTable column relies on the DB's server_default=now()
     # for created_at, but here the exact persisted value must also be hashed into the
     # payload below -- so it's generated in Python and passed through explicitly instead.
@@ -185,3 +194,59 @@ async def append_audit_entry(
     session.add(entry)
     await session.flush()  # type: ignore[attr-defined]
     return entry
+
+
+def _entry_payload(entry: AuditEntry) -> dict[str, str | None]:
+    """Rebuild the pinned 6-key hashed payload for ``entry`` (must match ``append_audit_entry``)."""
+    return {
+        "job_id": str(entry.job_id),
+        "span_id": str(entry.span_id) if entry.span_id is not None else None,
+        "action": entry.action.value,
+        "category": entry.category,
+        "reviewer": str(entry.reviewer_id),
+        "created_at": entry.created_at.isoformat(),
+    }
+
+
+@dataclass(frozen=True, kw_only=True)
+class ChainVerifyResult:
+    """Outcome of recomputing a job's audit hash chain.
+
+    ``head`` is the ``entry_hash`` of the last entry by sequence at verification time, or
+    ``GENESIS_PREV_HASH`` for an empty chain. ``first_broken_entry_id`` is the id of the first
+    entry whose stored ``prev_hash``/``entry_hash`` disagrees with the recomputed chain, or
+    ``None`` when the chain is intact.
+    """
+
+    verified: bool
+    entry_count: int
+    head: str
+    first_broken_entry_id: UUID | None = None
+
+
+async def verify_audit_chain(session: AsyncSession, job_id: UUID) -> ChainVerifyResult:
+    """Recompute ``job_id``'s audit hash chain and report whether it is intact.
+
+    Walks the entries in ``sequence`` order, recomputing each ``entry_hash`` from the pinned
+    6-key payload (``compute_entry_hash``) and confirming each ``prev_hash`` links to the prior
+    recomputed hash. An empty chain is vacuously verified.
+    """
+    stmt = select(AuditEntry).where(col(AuditEntry.job_id) == job_id).order_by(col(AuditEntry.sequence))
+    entries = list((await session.execute(stmt)).scalars().all())
+
+    prev = GENESIS_PREV_HASH
+    first_broken: UUID | None = None
+    for entry in entries:
+        expected = compute_entry_hash(prev, _entry_payload(entry))
+        if entry.prev_hash != prev or entry.entry_hash != expected:
+            first_broken = entry.id
+            break
+        prev = entry.entry_hash
+
+    head = entries[-1].entry_hash if entries else GENESIS_PREV_HASH
+    return ChainVerifyResult(
+        verified=first_broken is None,
+        entry_count=len(entries),
+        head=head,
+        first_broken_entry_id=first_broken,
+    )

@@ -15,6 +15,7 @@ from collections.abc import Awaitable, Callable
 import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlmodel import col
 
 from redact_api.models.audit_entry import AuditAction, AuditEntry
 from redact_api.models.redaction_job import RedactionJob
@@ -128,7 +129,7 @@ class TestAssembleExportManifest:
             await session.execute(
                 select(AuditEntry.entry_hash)
                 .where(AuditEntry.job_id == job.id)
-                .order_by(AuditEntry.sequence.desc())
+                .order_by(col(AuditEntry.sequence).desc())
                 .limit(1)
             )
         ).scalar_one()
