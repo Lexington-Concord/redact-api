@@ -20,7 +20,7 @@ register_middleware(broker)
 
 
 @broker.on_event("startup")  # type: ignore[arg-type]
-async def on_startup(state: object) -> None:
+async def on_startup(_state: object) -> None:
     """Validate configuration on worker startup and log readiness."""
     warnings = settings.validate_config()
     for warning in warnings:

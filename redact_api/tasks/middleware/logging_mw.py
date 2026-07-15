@@ -39,7 +39,7 @@ class LoggingMiddleware(TaskiqMiddleware):
     async def on_error(
         self,
         message: TaskiqMessage,
-        result: TaskiqResult[Any],
+        _result: TaskiqResult[Any],
         exception: BaseException,
     ) -> None:
         """Log a task that raised."""

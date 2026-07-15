@@ -33,15 +33,15 @@ class JobContextMiddleware(TaskiqMiddleware):
             LOGGER.debug("job_context_set", extra={"job_id": str(job_id), "task_id": message.task_id})
         return message
 
-    async def post_execute(self, message: TaskiqMessage, result: TaskiqResult[Any]) -> None:
+    async def post_execute(self, _message: TaskiqMessage, _result: TaskiqResult[Any]) -> None:
         """Clear the job-id context after the task completes."""
         clear_job_context()
 
     async def on_error(
         self,
-        message: TaskiqMessage,
-        result: TaskiqResult[Any],
-        exception: BaseException,
+        _message: TaskiqMessage,
+        _result: TaskiqResult[Any],
+        _exception: BaseException,
     ) -> None:
         """Clear the job-id context after the task raises."""
         clear_job_context()

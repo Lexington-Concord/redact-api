@@ -48,8 +48,8 @@ class MetricsMiddleware(TaskiqMiddleware):
     async def on_error(
         self,
         message: TaskiqMessage,
-        result: TaskiqResult[Any],
-        exception: BaseException,
+        _result: TaskiqResult[Any],
+        _exception: BaseException,
     ) -> None:
         """Record failure metrics when a task raises."""
         tasks_in_progress.labels(task_name=message.task_name).dec()
