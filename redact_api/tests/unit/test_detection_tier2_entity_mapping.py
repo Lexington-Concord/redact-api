@@ -13,6 +13,7 @@ the ``entities=`` filter only lets mapped types through.
 
 from __future__ import annotations
 
+import pytest
 from presidio_analyzer import RecognizerResult
 
 from redact_api.detection.consts import (
@@ -43,27 +44,32 @@ class TestEntityMappingTable:
 
 
 class TestToCandidateMapping:
-    def test_overlapping_tier1_entities_map_onto_tier1_categories(self) -> None:
+    @pytest.mark.parametrize(
+        ("entity_type", "category"),
+        [
+            ("US_SSN", CATEGORY_SSN),
+            ("PHONE_NUMBER", CATEGORY_PHONE),
+            ("EMAIL_ADDRESS", CATEGORY_EMAIL),
+        ],
+    )
+    def test_overlapping_tier1_entities_map_onto_tier1_categories(self, entity_type: str, category: str) -> None:
         text = "value 123-45-6789 here"
         page = make_page(text)
-        cases = {
-            "US_SSN": CATEGORY_SSN,
-            "PHONE_NUMBER": CATEGORY_PHONE,
-            "EMAIL_ADDRESS": CATEGORY_EMAIL,
-        }
         start, end = text.index("123-45-6789"), text.index("123-45-6789") + len("123-45-6789")
-        for entity_type, category in cases.items():
-            result = RecognizerResult(entity_type=entity_type, start=start, end=end, score=_ABOVE_FLOOR)
-            candidate = _to_candidate(page, result)
-            assert candidate is not None, entity_type
-            assert candidate.category == category, entity_type
-            assert candidate.text == text[start:end]
+        result = RecognizerResult(entity_type=entity_type, start=start, end=end, score=_ABOVE_FLOOR)
 
-    def test_unmapped_entity_types_are_dropped(self) -> None:
+        candidate = _to_candidate(page, result)
+
+        assert candidate is not None
+        assert candidate.category == category
+        assert candidate.text == text[start:end]
+
+    @pytest.mark.parametrize("entity_type", ["CREDIT_CARD", "DATE_TIME", "IP_ADDRESS", "URL"])
+    def test_unmapped_entity_types_are_dropped(self, entity_type: str) -> None:
         page = make_page("charged 4095260993934932 on file")
-        for entity_type in ("CREDIT_CARD", "DATE_TIME", "IP_ADDRESS", "URL"):
-            result = RecognizerResult(entity_type=entity_type, start=0, end=7, score=_ABOVE_FLOOR)
-            assert _to_candidate(page, result) is None, entity_type
+        result = RecognizerResult(entity_type=entity_type, start=0, end=7, score=_ABOVE_FLOOR)
+
+        assert _to_candidate(page, result) is None
 
 
 class TestEntityMappingLive:

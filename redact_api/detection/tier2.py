@@ -47,6 +47,11 @@ from redact_api.models.span import SourceTier
 # Presidio analyzes English text with the CPU-only large spaCy model (R3).
 _PRESIDIO_LANGUAGE = "en"
 _SPACY_MODEL = "en_core_web_lg"
+# Documented-but-unwired future config value (R3): a transformer-backed model
+# trades V1's CPU-only latency for higher NER accuracy. Do not install
+# spacy-transformers or wire a second code path until that tradeoff is
+# actually needed -- this constant exists only so the decision has a home.
+_SPACY_MODEL_TRANSFORMER_FUTURE = "en_core_web_trf"
 
 # spaCy NER label -> Presidio entity type. Copied from Presidio's shipped
 # ``default.yaml`` so overriding ``labels_to_ignore`` does not also drop the
@@ -70,6 +75,10 @@ _NLP_CONFIGURATION: dict[str, object] = {
     "models": [{"lang_code": _PRESIDIO_LANGUAGE, "model_name": _SPACY_MODEL}],
     "ner_model_configuration": {
         "model_to_presidio_entity_mapping": _MODEL_TO_PRESIDIO_ENTITY,
+        # Presidio's own per-entity rescoring knob -- independent of
+        # TIER2_MIN_CONFIDENCE (consts.py), which is this module's separate
+        # detection-time emit floor. Same value (0.4) here is coincidental;
+        # do not assume the two must move together.
         "low_confidence_score_multiplier": 0.4,
         "low_score_entity_names": [],
         "labels_to_ignore": [],
@@ -161,25 +170,33 @@ def _spans_overlap(tier1_span: CandidateSpan, tier2_span: CandidateSpan) -> bool
     )
 
 
-def _merge_survivor(
+def _merge_group(
     page: PageModel,
-    tier1_span: CandidateSpan,
-    overlapping: list[CandidateSpan],
+    tier1_group: list[CandidateSpan],
+    tier2_group: list[CandidateSpan],
 ) -> CandidateSpan:
-    """Widen ``tier1_span`` to cover every overlapping Tier-2 span (R6 merge).
+    """Fold one connected component of overlapping spans into a single survivor.
 
-    The survivor's range becomes the union ``[min(starts), max(ends))`` across the
-    Tier-1 span and all overlapping Tier-2 spans; its ``bboxes`` and ``text`` are
-    recomputed over that range (bboxes via ``resolve_span_bboxes`` -- one bbox per
-    contributing word, never a hand-built union rectangle); its ``source_tier``
-    and ``confidence`` stay Tier-1's. When the union equals the Tier-1 range the
+    ``tier1_group`` is always non-empty here (only Tier-1-anchored components
+    reach this helper) and is in input order, so ``tier1_group[0]`` is the
+    earliest-input-order Tier-1 span; it supplies ``source_tier``/``confidence``
+    (Tier 1 wins, R6). The survivor's range becomes the union
+    ``[min(starts), max(ends))`` across every span in the component -- all of
+    ``tier1_group`` plus every Tier-2 span that transitively overlaps any of
+    them -- so two Tier-1 spans that both overlap one Tier-2 span fold into one
+    canonical survivor instead of leaving the second Tier-1 span an unmerged
+    duplicate. ``bboxes``/``text`` are recomputed over that union range via
+    ``resolve_span_bboxes`` (one bbox per contributing word, never a hand-built
+    union rectangle). When the union equals the primary span's own range the
     merge is a no-op and the original span is returned unchanged.
     """
-    merged_start = min([tier1_span.start, *(span.start for span in overlapping)])
-    merged_end = max([tier1_span.end, *(span.end for span in overlapping)])
-    if merged_start == tier1_span.start and merged_end == tier1_span.end:
-        return tier1_span
-    return tier1_span.model_copy(
+    primary = tier1_group[0]
+    all_spans = [*tier1_group, *tier2_group]
+    merged_start = min(span.start for span in all_spans)
+    merged_end = max(span.end for span in all_spans)
+    if merged_start == primary.start and merged_end == primary.end:
+        return primary
+    return primary.model_copy(
         update={
             "start": merged_start,
             "end": merged_end,
@@ -189,6 +206,58 @@ def _merge_survivor(
     )
 
 
+class _UnionFind:
+    """Minimal disjoint-set structure over ``range(size)``, path-compressed."""
+
+    def __init__(self, size: int) -> None:
+        self._parent = list(range(size))
+
+    def find(self, index: int) -> int:
+        while self._parent[index] != index:
+            self._parent[index] = self._parent[self._parent[index]]
+            index = self._parent[index]
+        return index
+
+    def union(self, first: int, second: int) -> None:
+        root_first, root_second = self.find(first), self.find(second)
+        if root_first != root_second:
+            self._parent[root_second] = root_first
+
+
+def _group_overlapping_spans(
+    tier1_spans: list[CandidateSpan],
+    tier2_spans: list[CandidateSpan],
+) -> tuple[dict[int, list[int]], dict[int, list[int]]]:
+    """Union-find same-page/same-category overlapping spans into components.
+
+    Edges only ever run between a Tier-1 and a Tier-2 span (via
+    ``_spans_overlap``), but a component can still chain through multiple
+    spans on either side -- e.g. two Tier-1 spans that both overlap one
+    shared Tier-2 span end up in the same component. Returns
+    ``(tier1_groups, tier2_groups)``, each mapping a component's root index to
+    the (0-based, per-list) indices of its members; ``tier2_groups`` only
+    contains components that also touch at least one Tier-1 span.
+    """
+    tier2_offset = len(tier1_spans)
+    union_find = _UnionFind(tier2_offset + len(tier2_spans))
+    for tier1_index, tier1_span in enumerate(tier1_spans):
+        for tier2_index, tier2_span in enumerate(tier2_spans):
+            if _spans_overlap(tier1_span, tier2_span):
+                union_find.union(tier1_index, tier2_offset + tier2_index)
+
+    tier1_groups: dict[int, list[int]] = {}
+    for tier1_index in range(len(tier1_spans)):
+        tier1_groups.setdefault(union_find.find(tier1_index), []).append(tier1_index)
+
+    tier2_groups: dict[int, list[int]] = {}
+    for tier2_index in range(len(tier2_spans)):
+        root = union_find.find(tier2_offset + tier2_index)
+        if root in tier1_groups:
+            tier2_groups.setdefault(root, []).append(tier2_index)
+
+    return tier1_groups, tier2_groups
+
+
 def dedupe_tier2_against_tier1(
     page: PageModel,
     tier1_spans: list[CandidateSpan],
@@ -196,27 +265,29 @@ def dedupe_tier2_against_tier1(
 ) -> list[CandidateSpan]:
     """Merge overlapping Tier-2 spans into their Tier-1 counterparts (R6).
 
-    Pure function over in-memory values -- no Presidio/spaCy call. For each
-    Tier-1 span, every same-page/same-category Tier-2 span whose char range
-    overlaps is collected and merged in via ``_merge_survivor`` (Tier 1 keeps its
-    provenance/confidence but the range widens to the union, so a word either
-    detector flagged stays covered). Consumed Tier-2 spans are dropped; Tier-2
-    spans that overlapped nothing pass through unchanged, still stamped
-    ``SourceTier.TIER_2``. Output order: (possibly-merged) Tier-1 spans first, in
-    input order, then the surviving Tier-2 spans in input order.
+    Pure function over in-memory values -- no Presidio/spaCy call. Every
+    connected component (see ``_group_overlapping_spans``) touching at least
+    one Tier-1 span is folded into a single survivor via ``_merge_group`` --
+    not just the first Tier-1 span to claim a shared Tier-2 span, so if two
+    same-category Tier-1 spans both overlap one Tier-2 span (e.g. two adjacent
+    Tier-1 regex hits under one wider NER span), both merge into one canonical
+    survivor rather than leaving the second an unmerged duplicate. Tier-2
+    spans with no Tier-1 overlap pass through unchanged, still stamped
+    ``SourceTier.TIER_2``. Output order: (possibly-merged) Tier-1-anchored
+    survivors first, ordered by the earliest-input-order Tier-1 span in their
+    component, then the surviving (unconsumed) Tier-2 spans in input order.
     """
-    consumed: set[int] = set()
-    result: list[CandidateSpan] = []
-    for tier1_span in tier1_spans:
-        overlaps = [
-            index
-            for index, tier2_span in enumerate(tier2_spans)
-            if index not in consumed and _spans_overlap(tier1_span, tier2_span)
-        ]
-        if not overlaps:
-            result.append(tier1_span)
-            continue
-        consumed.update(overlaps)
-        result.append(_merge_survivor(page, tier1_span, [tier2_spans[index] for index in overlaps]))
-    result.extend(tier2_span for index, tier2_span in enumerate(tier2_spans) if index not in consumed)
+    tier1_groups, tier2_groups = _group_overlapping_spans(tier1_spans, tier2_spans)
+    consumed_tier2 = {index for indices in tier2_groups.values() for index in indices}
+
+    survivor_roots = sorted(tier1_groups, key=lambda root: min(tier1_groups[root]))
+    result = [
+        _merge_group(
+            page,
+            [tier1_spans[index] for index in tier1_groups[root]],
+            [tier2_spans[index] for index in tier2_groups.get(root, [])],
+        )
+        for root in survivor_roots
+    ]
+    result.extend(tier2_spans[index] for index in range(len(tier2_spans)) if index not in consumed_tier2)
     return result

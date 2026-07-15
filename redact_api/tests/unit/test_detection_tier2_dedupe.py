@@ -134,3 +134,32 @@ class TestBoundaryExtensionMerge:
         # (d) Tier-1's provenance/confidence are unchanged by the merge.
         assert survivor.source_tier == SourceTier.TIER_1
         assert survivor.confidence == CONFIDENCE_REGEX_ONLY
+
+
+class TestMultipleTier1SpansOverlapOneTier2Span:
+    def test_both_tier1_spans_merge_into_one_canonical_survivor(self) -> None:
+        # Two adjacent Tier-1 regex hits ("John" and "Smith") both fall inside
+        # one wider Tier-2 NER span ("John Smith"). Regression test: a prior
+        # implementation consumed the Tier-2 span on the first Tier-1 match,
+        # leaving the second Tier-1 span an unmerged duplicate covering the
+        # same region instead of folding both into one canonical span.
+        page = make_page(_TEXT)
+        t1_first = _span(
+            page, (5, 9), category=CATEGORY_NAME, tier=SourceTier.TIER_1, confidence=CONFIDENCE_REGEX_ONLY
+        )
+        t1_second = _span(
+            page, (10, 15), category=CATEGORY_NAME, tier=SourceTier.TIER_1, confidence=CONFIDENCE_REGEX_ONLY
+        )
+        t2 = _span(page, (5, 15), category=CATEGORY_NAME, tier=SourceTier.TIER_2, confidence=TIER2_MIN_CONFIDENCE)
+
+        result = dedupe_tier2_against_tier1(page, [t1_first, t1_second], [t2])
+
+        assert len(result) == 1
+        (survivor,) = result
+        assert survivor.start == 5
+        assert survivor.end == 15
+        assert survivor.bboxes == resolve_span_bboxes(page, 5, 15)
+        assert survivor.text == page.text[5:15]
+        # Earliest-input-order Tier-1 span (t1_first) supplies provenance.
+        assert survivor.source_tier == SourceTier.TIER_1
+        assert survivor.confidence == CONFIDENCE_REGEX_ONLY
