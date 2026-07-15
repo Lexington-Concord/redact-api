@@ -18,13 +18,14 @@ from sqlmodel import col
 
 from redact_api.models.audit_entry import AuditAction, AuditEntry
 from redact_api.services.export_manifest_service import (
-    ExportChainBrokenError,
+    ExportAssemblyError,
     assemble_export_manifest,
 )
 from redact_api.tests.conftest import FakeStorageClient
 from redact_api.tests.integration.conftest import (
     SEED_ORIGINAL_PDF_BYTES,
     SEED_REDACTED_PDF_BYTES,
+    SEED_VERIFY_SUMMARY,
     SeedVerifiedJob,
 )
 
@@ -61,7 +62,7 @@ class TestAssembleExportManifest:
         disposition = manifest.dispositions[0]
         assert disposition.action == AuditAction.APPROVED
         assert disposition.category == "PERSON"
-        assert disposition.text_hash is not None
+        assert disposition.text_digest is not None
         assert disposition.span_id is not None
 
     @pytest.mark.asyncio
@@ -102,10 +103,7 @@ class TestAssembleExportManifest:
 
         manifest = await assemble_export_manifest(session, storage, job)
 
-        assert manifest.verify_summary["verdict"] == "pass"
-        checks = manifest.verify_summary["checks"]
-        assert isinstance(checks, list)
-        assert {"check_type": "text_layer", "passed": True, "pages_checked": 1} in checks
+        assert manifest.verify_summary == SEED_VERIFY_SUMMARY
 
     @pytest.mark.asyncio
     async def test_chain_head_entry_count_and_verified(
@@ -149,5 +147,5 @@ class TestAssembleExportManifest:
         session.add(first)
         await session.flush()  # type: ignore[attr-defined]
 
-        with pytest.raises(ExportChainBrokenError):
+        with pytest.raises(ExportAssemblyError):
             await assemble_export_manifest(session, storage, job)

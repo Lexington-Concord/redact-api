@@ -34,7 +34,7 @@ from redact_api.models.page import Page
 from redact_api.models.redaction_job import JobStatus, RedactionJob, RedactionJobRead
 from redact_api.models.span import Span, SpanRead
 from redact_api.services.export_manifest_service import (
-    ExportChainBrokenError,
+    ExportAssemblyError,
     assemble_export_manifest,
 )
 from redact_api.services.jobs_service import (
@@ -270,8 +270,17 @@ async def export_job(
     # assemble_export_manifest below so it isn't recomputed a second time.
     chain = await verify_audit_chain(session, job.id)
     if not chain.verified:
-        broken_chain_msg = "Audit chain failed verification; export blocked"
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=broken_chain_msg)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "error": "audit_chain_broken",
+                "message": "Audit chain failed verification; export blocked",
+                "entry_count": chain.entry_count,
+                "first_broken_entry_id": str(chain.first_broken_entry_id)
+                if chain.first_broken_entry_id is not None
+                else None,
+            },
+        )
 
     # Downloaded once here (after the chain gate) and reused for both hashing (inside
     # assemble_export_manifest) and the zip bundle below, instead of fetching the same object twice.
@@ -279,8 +288,11 @@ async def export_job(
 
     try:
         manifest = await assemble_export_manifest(session, storage, job, chain=chain, redacted_bytes=pdf_bytes)
-    except ExportChainBrokenError as error:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
+    except ExportAssemblyError as error:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"error": "export_assembly_failed", "message": str(error)},
+        ) from error
 
     manifest_bytes = manifest.model_dump_json().encode("utf-8")
     zip_bytes = _build_export_zip(pdf_bytes, manifest_bytes)

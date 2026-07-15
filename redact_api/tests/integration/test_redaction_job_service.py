@@ -396,6 +396,9 @@ class TestComputeEntryHash:
     """The pinned 6-key chain formula (resolution #6) is stable and deterministic."""
 
     def test_matches_golden_formula(self) -> None:
+        """Pinned literal digest for a fixed payload -- do not re-derive `expected` from the
+        same canonicalization steps `compute_entry_hash` uses internally, or this test stops
+        guarding against exactly the hash-formula drift resolution #6 exists to prevent."""
         payload: dict[str, str | None] = {
             "job_id": "11111111-1111-1111-1111-111111111111",
             "span_id": None,
@@ -404,8 +407,7 @@ class TestComputeEntryHash:
             "reviewer": "22222222-2222-2222-2222-222222222222",
             "created_at": "2026-07-15T12:00:00+00:00",
         }
-        canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
-        expected = hashlib.sha256((GENESIS_PREV_HASH + canonical).encode("utf-8")).hexdigest()
+        expected = "2adb434fddee57c258dcc0d994fac25045a5ef1bcd7778045f76efbc1b1efd91"
         assert compute_entry_hash(GENESIS_PREV_HASH, payload) == expected
 
     def test_deterministic(self) -> None:

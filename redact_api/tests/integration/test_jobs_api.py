@@ -587,6 +587,9 @@ class TestExport:
         manifest = json.loads(members["manifest.json"])
         exported_actions = [event["action"] for event in manifest["lifecycle_events"]]
         assert AuditAction.EXPORTED.value in exported_actions
+        # Seeded chain has 3 entries (APPROVED + APPLY_STARTED + VERIFY_PASSED); the first
+        # export appends EXPORTED, so the re-read's entry_count must reflect all 4.
+        assert manifest["entry_count"] == 4
 
     @pytest.mark.asyncio
     async def test_export_exported_entry_reviewer_is_tenant_user(

@@ -2,7 +2,7 @@
 
 ``assemble_export_manifest`` is the single place that turns a VERIFIED job's live audit hash
 chain plus its stored original/redacted PDFs into the typed ``ExportManifest`` contract. It
-verifies the chain first (raising ``ExportChainBrokenError`` before any PDF bytes are touched),
+verifies the chain first (raising ``ExportAssemblyError`` before any PDF bytes are touched),
 hashes both PDFs, splits the audit rows into span-level dispositions vs. job-level lifecycle
 events, and decodes the digest-only verify verdict blob. Assembly is stateless and read-only:
 it persists nothing and is safe to re-run on every export GET, always reflecting current chain
@@ -33,8 +33,12 @@ from redact_api.storage.client import StorageClient
 _VERIFY_ACTIONS = (AuditAction.VERIFY_PASSED, AuditAction.VERIFY_FAILED)
 
 
-class ExportChainBrokenError(Exception):
-    """Raised when a job's audit hash chain fails verification at manifest-assembly time."""
+class ExportAssemblyError(Exception):
+    """Raised when a job's manifest cannot be assembled: a broken audit chain (tamper-evidence
+    failure) or a missing redacted artifact (routine precondition, not tampering). Callers that
+    need to distinguish the two should inspect the message; both currently 409 identically at
+    the export endpoint.
+    """
 
 
 def _sha256_hex(data: bytes) -> str:
@@ -52,7 +56,7 @@ async def assemble_export_manifest(
 ) -> ExportManifest:
     """Assemble the ``ExportManifest`` for ``job`` from its live audit chain and stored PDFs.
 
-    Verifies the audit chain first and raises ``ExportChainBrokenError`` before any PDF bytes
+    Verifies the audit chain first and raises ``ExportAssemblyError`` before any PDF bytes
     are downloaded if it is broken. Requires ``job.redacted_pdf_key`` to be set (the export
     endpoint guarantees this for a VERIFIED/EXPORTED job).
 
@@ -65,11 +69,11 @@ async def assemble_export_manifest(
     chain = chain if chain is not None else await verify_audit_chain(session, job.id)
     if not chain.verified:
         msg = f"Audit chain for job {job.id} failed verification (first broken: {chain.first_broken_entry_id})"
-        raise ExportChainBrokenError(msg)
+        raise ExportAssemblyError(msg)
 
     if job.redacted_pdf_key is None:
         msg = f"Job {job.id} has no redacted artifact; cannot assemble an export manifest"
-        raise ExportChainBrokenError(msg)
+        raise ExportAssemblyError(msg)
 
     original_bytes = await storage.download_bytes(keys.original_pdf_key(job.document_id))
     if redacted_bytes is None:
@@ -88,10 +92,9 @@ async def assemble_export_manifest(
                     span_id=entry.span_id,
                     action=entry.action,
                     category=entry.category,
-                    text_hash=entry.text_hash,
+                    text_digest=entry.text_hash,
                     reviewer_id=entry.reviewer_id,
-                    sequence=entry.sequence,
-                    created_at=entry.created_at,
+                    disposed_at=entry.created_at,
                 )
             )
         else:
@@ -102,7 +105,11 @@ async def assemble_export_manifest(
                     created_at=entry.created_at,
                 )
             )
-        if not verify_summary and entry.action in _VERIFY_ACTIONS:
+        # Why: takes the LAST matching entry rather than the first. There is at most one
+        # verify-action entry per job today (no retry edge in VALID_TRANSITIONS -- APPLYING is
+        # reachable only once per job lifecycle), but iterating to the last match keeps this
+        # correct if that ever changes, rather than silently freezing on a stale verdict.
+        if entry.action in _VERIFY_ACTIONS:
             verify_summary = json.loads(entry.category)
 
     return ExportManifest(

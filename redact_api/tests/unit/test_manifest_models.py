@@ -30,10 +30,9 @@ def _disposition() -> ManifestDisposition:
         span_id=SPAN_ID,
         action=AuditAction.APPROVED,
         category="PERSON",
-        text_hash=hashlib.sha256(b"john doe").hexdigest(),
+        text_digest=hashlib.sha256(b"john doe").hexdigest(),
         reviewer_id=REVIEWER_ID,
-        sequence=1,
-        created_at=FIXED_TS,
+        disposed_at=FIXED_TS,
     )
 
 
@@ -99,31 +98,29 @@ class TestCanonicalJson:
 
 
 class TestNoRawText:
-    def test_text_hash_is_a_digest_not_raw_text(self) -> None:
+    def test_text_digest_is_a_digest_not_raw_text(self) -> None:
         raw = "John Doe"
         digest = hashlib.sha256(raw.encode()).hexdigest()
         disposition = ManifestDisposition(
             span_id=SPAN_ID,
             action=AuditAction.APPROVED,
             category="PERSON",
-            text_hash=digest,
+            text_digest=digest,
             reviewer_id=REVIEWER_ID,
-            sequence=1,
-            created_at=FIXED_TS,
+            disposed_at=FIXED_TS,
         )
-        assert disposition.text_hash == digest
-        assert disposition.text_hash != raw
+        assert disposition.text_digest == digest
+        assert disposition.text_digest != raw
         assert len(digest) == 64
         assert int(digest, 16) >= 0  # valid hex
 
-    def test_text_hash_may_be_none_for_lifecycle_style_rows(self) -> None:
+    def test_text_digest_may_be_none_for_degenerate_rows(self) -> None:
         disposition = ManifestDisposition(
             span_id=SPAN_ID,
             action=AuditAction.APPROVED,
             category="PERSON",
-            text_hash=None,
+            text_digest=None,
             reviewer_id=REVIEWER_ID,
-            sequence=1,
-            created_at=FIXED_TS,
+            disposed_at=FIXED_TS,
         )
-        assert disposition.text_hash is None
+        assert disposition.text_digest is None

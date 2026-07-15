@@ -194,6 +194,10 @@ async def append_audit_entry(
         msg = f"RedactionJob {job_id} not found"
         raise LookupError(msg)
 
+    if event.span_id is not None and event.text is None:
+        no_text_msg = "A span-level audit entry (span_id set) must carry text to hash; got text=None"
+        raise ValueError(no_text_msg)
+
     prev_hash, sequence = await _next_chain_link(session, job_id)
     # Job-level lifecycle events carry no span text, so they store a NULL digest. text_hash
     # was never part of the pinned hashed payload, so this branch does not perturb the chain.

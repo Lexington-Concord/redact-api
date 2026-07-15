@@ -29,17 +29,16 @@ from redact_api.models.audit_entry import AuditAction
 class ManifestDisposition(BaseModel):
     """One span-level audit row (``span_id IS NOT NULL``): a reviewer disposition of a span.
 
-    ``text_hash`` is the SHA-256 digest of the normalized span text (never the text itself);
+    ``text_digest`` is the SHA-256 digest of the normalized span text (never the text itself);
     it may be ``None`` only in the degenerate case of a span-level row appended without text.
     """
 
     span_id: UUID
     action: AuditAction
     category: str
-    text_hash: str | None
+    text_digest: str | None
     reviewer_id: UUID
-    sequence: int
-    created_at: datetime
+    disposed_at: datetime
 
 
 class ManifestLifecycleEvent(BaseModel):
