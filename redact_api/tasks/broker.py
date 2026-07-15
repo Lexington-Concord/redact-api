@@ -22,18 +22,21 @@ TASKIQ_ENV = os.environ.get("TASKIQ_ENV", "production")
 # Dedicated queue for this service's ingest/detect/apply messages.
 REDACT_API_QUEUE_NAME = "redact-api-tasks"
 
-broker: AsyncBroker
 
-if TASKIQ_ENV == "test":
-    broker = InMemoryBroker()
-else:
+def build_production_broker() -> AsyncBroker:
+    """Construct the RabbitMQ + Redis broker for non-test environments.
+
+    ``declare=True`` because redact-api owns its queue end to end (no separate API process
+    declares it first, unlike the worker template's ``declare=False``). Constructing the
+    broker opens no connection, so this is safe to call in a unit test.
+    """
     from taskiq_aio_pika import AioPikaBroker
     from taskiq_aio_pika.queue import Queue, QueueType
     from taskiq_redis import RedisAsyncResultBackend
 
     from redact_api.core.config import settings
 
-    broker = AioPikaBroker(
+    return AioPikaBroker(
         url=settings.rabbitmq_url,
         dead_letter_queue=None,
         task_queues=[
@@ -45,3 +48,11 @@ else:
             ),
         ],
     ).with_result_backend(RedisAsyncResultBackend(redis_url=settings.redis_url))
+
+
+broker: AsyncBroker
+
+if TASKIQ_ENV == "test":
+    broker = InMemoryBroker()
+else:
+    broker = build_production_broker()
