@@ -30,6 +30,11 @@ dependencies = [
   "presidio-analyzer==2.2.363",
   "spacy==3.8.13",
   "en-core-web-lg @ https://github.com/explosion/spacy-models/releases/download/en_core_web_lg-3.8.0/en_core_web_lg-3.8.0-py3-none-any.whl",
+  # Async ingest/detect/apply pipeline (redact-api#8). TaskIQ publishes to RabbitMQ
+  # (aio-pika) and records results in Redis; same stack as the worker template.
+  "taskiq>=0.11.0",
+  "taskiq-aio-pika>=0.4.0",
+  "taskiq-redis>=1.0.0",
 ]
 
 [build-system]
@@ -133,6 +138,11 @@ ignore_missing_imports = true
 # PyMuPDF (imported as fitz) and pytesseract ship no type stubs / py.typed marker
 [[tool.mypy.overrides]]
 module = ["fitz", "fitz.*", "pytesseract"]
+ignore_missing_imports = true
+
+# TaskIQ and its aio-pika/redis brokers ship no complete type stubs
+[[tool.mypy.overrides]]
+module = ["taskiq.*", "taskiq_aio_pika.*", "taskiq_redis.*"]
 ignore_missing_imports = true
 
 [tool.coverage.run]
