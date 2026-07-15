@@ -315,9 +315,7 @@ class TestDispositions:
 
         assert await _count(session_maker, Disposition, span_id=span.id) == 1
         async with session_maker() as check:
-            disposition = (
-                await check.execute(select(Disposition).where(Disposition.span_id == span.id))
-            ).scalar_one()
+            disposition = (await check.execute(select(Disposition).where(Disposition.span_id == span.id))).scalar_one()
             assert disposition.action == DispositionAction.REJECTED
         assert await _count(session_maker, AuditEntry, job_id=job.id) == 2
 
