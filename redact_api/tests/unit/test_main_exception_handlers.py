@@ -148,10 +148,13 @@ class TestLifespanEvents:
         mock_engine.begin.return_value = mock_context
         mock_engine.dispose = AsyncMock()
 
+        mock_broker = AsyncMock()
+
         with (
             patch("redact_api.main.settings") as mock_settings,
             patch("redact_api.main.create_db_engine", return_value=mock_engine),
             patch("redact_api.main.create_session_maker"),
+            patch("redact_api.main.broker", mock_broker),
         ):
             mock_settings.validate_config.return_value = ["Warning 1", "Warning 2"]
             mock_settings.db_pool_size = 5
@@ -167,6 +170,11 @@ class TestLifespanEvents:
 
             mock_settings.validate_config.assert_called_once()
             mock_engine.dispose.assert_called_once()
+            # redact-api#8: the API process must start/stop the TaskIQ broker itself --
+            # nothing else does this for the uvicorn process (unlike the worker CLI, which
+            # starts its own broker automatically).
+            mock_broker.startup.assert_awaited_once()
+            mock_broker.shutdown.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_lifespan_startup_raises_on_config_error(self) -> None:

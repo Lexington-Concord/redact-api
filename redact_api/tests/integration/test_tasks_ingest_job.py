@@ -14,6 +14,7 @@ from uuid import UUID
 import pytest
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from taskiq import InMemoryBroker
 
 from redact_api.models.activity_log import ActivityLog
 from redact_api.models.organization import Organization
@@ -98,6 +99,34 @@ class TestIngestJob:
         assert await _status(session_maker, job.id) == JobStatus.FAILED
         assert await _count(session_maker, ActivityLog, resource_id=job.id) == 1
         detect_kiq.assert_not_awaited()
+
+    async def test_via_broker_kiq_ingests_through_middleware_pipeline(  # noqa: PLR0913 - fixture params
+        self,
+        session: AsyncSession,
+        session_maker: SessionMaker,
+        make_organization: MakeOrg,
+        make_job: MakeJob,
+        wire_ingest: tuple[FakeStorageClient, AsyncMock],
+        test_broker: InMemoryBroker,
+    ) -> None:
+        """Drive ingest_job through the real broker (``.kiq()`` + ``.wait_result()``), not a
+        direct call, so the middleware pipeline (job context, logging, metrics) actually
+        runs -- this is what would have caught the MetricsMiddleware double-counting bug
+        before it shipped, since a direct call bypasses middleware entirely.
+        """
+        assert test_broker is not None  # confirms TASKIQ_ENV=test wired the in-memory broker
+        storage, detect_kiq = wire_ingest
+        org = await make_organization()
+        job = await make_job(org)
+        await session.commit()
+        storage.uploads[keys.original_pdf_key(job.document_id)] = build_multi_page_pdf(page_count=1)
+
+        task = await ingest_job.kiq(job_id=str(job.id))
+        result = await task.wait_result(check_interval=0.01)
+
+        assert not result.is_err
+        assert await _status(session_maker, job.id) == JobStatus.INGESTED
+        detect_kiq.assert_awaited_once_with(job_id=str(job.id))
 
     async def test_redelivery_is_noop(
         self,

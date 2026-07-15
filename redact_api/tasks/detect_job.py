@@ -44,8 +44,16 @@ async def detect_job(job_id: str) -> None:
             # human must review and disposition spans before the irreversible burn-in runs.
             await transition_job_status(session, job, JobStatus.IN_REVIEW)
             await session.commit()
-        except Exception:
-            LOGGER.exception("detect_job_failed", extra={"job_id": job_id})
+        except Exception as exc:
+            # Why: digest-only failure logging (no raw exception message/traceback) -- this
+            # pipeline persists real detected PII (Span.text), and a future exception whose
+            # message happens to echo detected content (e.g. a DB error echoing an offending
+            # column value) must not leak raw PII into logs. Deliberately not
+            # LOGGER.exception() -- that would attach the raw message/traceback via
+            # exc_info=True, which is exactly what this must avoid.
+            LOGGER.error(  # noqa: TRY400 - intentionally not .exception(): see comment above
+                "detect_job_failed", extra={"job_id": job_id, "exception_type": type(exc).__name__}
+            )
             await session.rollback()
             failed = await fail_job(UUID(job_id))
             if failed is not None:

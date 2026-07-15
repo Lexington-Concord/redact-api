@@ -15,6 +15,7 @@ import pytest
 from pydantic import ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from taskiq import InMemoryBroker
 
 from redact_api.models.activity_log import ActivityLog
 from redact_api.models.disposition import Disposition, DispositionAction
@@ -172,3 +173,32 @@ class TestApplyJob:
         assert refreshed.status == JobStatus.VERIFIED
         assert await _count(session_maker, ActivityLog, resource_id=job.id) == 0
         assert keys.redacted_pdf_key(job.id) not in wire_apply.uploads
+
+    async def test_via_broker_kiq_applies_through_middleware_pipeline(  # noqa: PLR0913 - fixture params
+        self,
+        session: AsyncSession,
+        session_maker: SessionMaker,
+        make_organization: MakeOrg,
+        make_job: MakeJob,
+        wire_apply: FakeStorageClient,
+        monkeypatch: pytest.MonkeyPatch,
+        test_broker: InMemoryBroker,
+    ) -> None:
+        """Drive apply_job through the real broker (``.kiq()`` + ``.wait_result()``), not a
+        direct call, so the middleware pipeline (job context, logging, metrics) actually
+        runs -- this is what would have caught the MetricsMiddleware double-counting bug
+        before it shipped, since a direct call bypasses middleware entirely.
+        """
+        assert test_broker is not None  # confirms TASKIQ_ENV=test wired the in-memory broker
+        monkeypatch.setattr(apply_job_module, "apply", _passing_apply)
+        org = await make_organization()
+        job = await make_job(org, status=JobStatus.APPLYING)
+        await session.commit()
+        wire_apply.uploads[keys.original_pdf_key(job.document_id)] = build_multi_page_pdf(page_count=1)
+
+        task = await apply_job.kiq(job_id=str(job.id))
+        result = await task.wait_result(check_interval=0.01)
+
+        assert not result.is_err
+        refreshed = await _fetch_job(session_maker, job.id)
+        assert refreshed.status == JobStatus.VERIFIED

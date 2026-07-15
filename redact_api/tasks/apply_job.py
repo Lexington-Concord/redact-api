@@ -43,7 +43,17 @@ async def apply_job(job_id: str) -> None:
             result = apply(original_bytes, approved_spans)
 
             if not result.passed:
-                LOGGER.warning("apply_job_verify_failed", extra={"job_id": job_id})
+                # Digest-only diagnostics (verdict + finding count) -- never the raw
+                # redacted text. See VerifyFinding.redacted_string_digest (R4): findings
+                # never carry the recoverable string itself, only a digest.
+                LOGGER.warning(
+                    "apply_job_verify_failed",
+                    extra={
+                        "job_id": job_id,
+                        "verdict": result.verify_result.verdict.value,
+                        "finding_count": len(result.verify_result.findings),
+                    },
+                )
                 await transition_job_status(session, job, JobStatus.FAILED)
                 await session.commit()
                 await log_job_terminal(job, JobStatus.FAILED)
@@ -55,8 +65,16 @@ async def apply_job(job_id: str) -> None:
             session.add(job)
             await transition_job_status(session, job, JobStatus.VERIFIED)
             await session.commit()
-        except Exception:
-            LOGGER.exception("apply_job_failed", extra={"job_id": job_id})
+        except Exception as exc:
+            # Why: digest-only failure logging (no raw exception message/traceback) -- this
+            # pipeline persists real detected PII (Span.text), and a future exception whose
+            # message happens to echo detected content (e.g. a DB error echoing an offending
+            # column value) must not leak raw PII into logs. Deliberately not
+            # LOGGER.exception() -- that would attach the raw message/traceback via
+            # exc_info=True, which is exactly what this must avoid.
+            LOGGER.error(  # noqa: TRY400 - intentionally not .exception(): see comment above
+                "apply_job_failed", extra={"job_id": job_id, "exception_type": type(exc).__name__}
+            )
             await session.rollback()
             failed = await fail_job(UUID(job_id))
             if failed is not None:

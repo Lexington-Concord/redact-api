@@ -8,11 +8,13 @@ spans), a detection failure (-> FAILED, re-raised), and guard-first redelivery (
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
+from unittest.mock import AsyncMock
 from uuid import UUID
 
 import pytest
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from taskiq import InMemoryBroker
 
 from redact_api.models.activity_log import ActivityLog
 from redact_api.models.organization import Organization
@@ -21,6 +23,7 @@ from redact_api.models.redaction_job import JobStatus, RedactionJob
 from redact_api.models.span import Span
 from redact_api.storage import keys
 from redact_api.tasks import detect_job as detect_job_module
+from redact_api.tasks.apply_job import apply_job
 from redact_api.tasks.detect_job import detect_job
 from redact_api.tests.conftest import FakeStorageClient
 from redact_api.tests.fixtures.ingest_pdfs import build_pii_sample_pdf
@@ -64,14 +67,20 @@ def wire_detect(monkeypatch: pytest.MonkeyPatch) -> FakeStorageClient:
 
 
 class TestDetectJob:
-    async def test_happy_path_detects_and_advances_to_in_review(
+    async def test_happy_path_detects_and_advances_to_in_review(  # noqa: PLR0913 - fixture params
         self,
         session: AsyncSession,
         session_maker: SessionMaker,
         make_organization: MakeOrg,
         make_job: MakeJob,
         wire_detect: FakeStorageClient,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
+        # Ticket invariant: nothing auto-enqueues apply_job, ever -- a human must review and
+        # disposition spans first via the disposition-gated POST /jobs/{id}/apply endpoint.
+        apply_kiq = AsyncMock()
+        monkeypatch.setattr(apply_job, "kiq", apply_kiq)
+
         org = await make_organization()
         job = await make_job(org, status=JobStatus.INGESTED)
         await session.commit()
@@ -82,6 +91,7 @@ class TestDetectJob:
         assert await _status(session_maker, job.id) == JobStatus.IN_REVIEW
         assert await _span_count_for_document(session_maker, job.document_id) > 0
         assert await _count(session_maker, ActivityLog, resource_id=job.id) == 1
+        apply_kiq.assert_not_awaited()
 
     async def test_detection_failure_marks_failed_and_reraises(  # noqa: PLR0913 - fixture params
         self,
@@ -127,3 +137,29 @@ class TestDetectJob:
         assert await _status(session_maker, job.id) == JobStatus.DETECTED
         assert await _span_count_for_document(session_maker, job.document_id) == 0
         assert await _count(session_maker, ActivityLog, resource_id=job.id) == 0
+
+    async def test_via_broker_kiq_detects_through_middleware_pipeline(  # noqa: PLR0913 - fixture params
+        self,
+        session: AsyncSession,
+        session_maker: SessionMaker,
+        make_organization: MakeOrg,
+        make_job: MakeJob,
+        wire_detect: FakeStorageClient,
+        test_broker: InMemoryBroker,
+    ) -> None:
+        """Drive detect_job through the real broker (``.kiq()`` + ``.wait_result()``), not a
+        direct call, so the middleware pipeline (job context, logging, metrics) actually
+        runs -- this is what would have caught the MetricsMiddleware double-counting bug
+        before it shipped, since a direct call bypasses middleware entirely.
+        """
+        assert test_broker is not None  # confirms TASKIQ_ENV=test wired the in-memory broker
+        org = await make_organization()
+        job = await make_job(org, status=JobStatus.INGESTED)
+        await session.commit()
+        wire_detect.uploads[keys.original_pdf_key(job.document_id)] = build_pii_sample_pdf()
+
+        task = await detect_job.kiq(job_id=str(job.id))
+        result = await task.wait_result(check_interval=0.01)
+
+        assert not result.is_err
+        assert await _status(session_maker, job.id) == JobStatus.IN_REVIEW

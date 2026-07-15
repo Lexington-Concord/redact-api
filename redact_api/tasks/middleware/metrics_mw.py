@@ -1,10 +1,16 @@
 """Prometheus metrics middleware for task execution (redact-api#8).
 
 Shape-copied from the worker template's ``metrics_mw``: increments the started counter
-and in-progress gauge in ``pre_execute``, records duration + the completed/failed counter
-in ``post_execute``, and covers a raised task in ``on_error`` (decrement gauge, increment
-failed, still record duration). There is no retried counter -- this pipeline has no retry
-edge.
+and in-progress gauge in ``pre_execute``, records duration + the completed counter in
+``post_execute`` on success, and covers a raised task in ``on_error`` (decrement gauge,
+increment failed, still record duration). There is no retried counter -- this pipeline has
+no retry edge.
+
+Why: TaskIQ's receiver calls BOTH ``on_error`` and ``post_execute`` when a task raises (this
+is TaskIQ's own contract, not a bug here). ``on_error`` fully owns the failure path, so
+``post_execute`` must skip all of its recording when ``result.is_err`` is true -- otherwise
+every failure double-counts (gauge decremented twice, ``tasks_failed_total`` incremented
+twice, duration observed twice).
 """
 
 from __future__ import annotations
@@ -37,13 +43,18 @@ class MetricsMiddleware(TaskiqMiddleware):
         return message
 
     async def post_execute(self, message: TaskiqMessage, result: TaskiqResult[Any]) -> None:
-        """Record completion metrics (duration + completed/failed counter)."""
+        """Record success metrics (duration + completed counter).
+
+        Skips all recording when ``result.is_err`` is true: ``on_error`` already fully
+        owns the failure path (gauge decrement, ``tasks_failed_total``, duration), and
+        TaskIQ's receiver calls both hooks on a raised task, so recording here too would
+        double-count.
+        """
+        if result.is_err:
+            return
         tasks_in_progress.labels(task_name=message.task_name).dec()
         self._observe_duration(message)
-        if result.is_err:
-            tasks_failed_total.labels(environment=settings.environment, task_name=message.task_name).inc()
-        else:
-            tasks_completed_total.labels(environment=settings.environment, task_name=message.task_name).inc()
+        tasks_completed_total.labels(environment=settings.environment, task_name=message.task_name).inc()
 
     async def on_error(
         self,
