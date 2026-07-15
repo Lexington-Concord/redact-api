@@ -137,7 +137,7 @@ class TestLogActivityFireAndForget:
         mock_session_maker.return_value.__aexit__ = AsyncMock(return_value=None)
 
         with patch(
-            "redact_api.core.activity_logging.async_session_maker",
+            "redact_api.db.session.async_session_maker",
             mock_session_maker,
         ):
             # Log without passing session - fire-and-forget mode
@@ -190,7 +190,7 @@ class TestLogActivityExceptionHandling:
         mock_session.__aenter__.side_effect = Exception("Session creation failed")
 
         with patch(
-            "redact_api.core.activity_logging.async_session_maker",
+            "redact_api.db.session.async_session_maker",
             return_value=mock_session,
         ):
             # This should NOT raise - errors are suppressed
