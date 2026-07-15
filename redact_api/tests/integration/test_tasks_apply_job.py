@@ -9,7 +9,6 @@ failure, and guard-first redelivery.
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from types import SimpleNamespace
 from uuid import UUID
 
 import pytest
@@ -76,23 +75,19 @@ async def _seed_approved_span(session: AsyncSession, job: RedactionJob, *, bboxe
     await session.flush()  # type: ignore[attr-defined]
 
 
-ApplyFn = Callable[[bytes, list[ApprovedSpan]], ApplyResult]
-
-
 @pytest.fixture
-def wire_apply(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
-    """Wire apply_job to an in-memory storage double, with a hook to stub ``apply``."""
+def wire_apply(monkeypatch: pytest.MonkeyPatch) -> FakeStorageClient:
+    """Wire apply_job to an in-memory storage double.
+
+    Individual tests stub ``apply_job_module.apply`` directly via ``monkeypatch``.
+    """
     storage = FakeStorageClient()
     monkeypatch.setattr(apply_job_module, "build_storage_client", lambda: storage)
-
-    def set_apply(fn: ApplyFn) -> None:
-        monkeypatch.setattr(apply_job_module, "apply", fn)
-
-    return SimpleNamespace(storage=storage, set_apply=set_apply)
+    return storage
 
 
 class TestApplyJob:
-    async def test_verify_pass_lands_verified(
+    async def test_verify_pass_lands_verified(  # noqa: PLR0913 - fixture params
         self,
         session: AsyncSession,
         session_maker: SessionMaker,
@@ -115,7 +110,7 @@ class TestApplyJob:
         assert keys.redacted_pdf_key(job.id) in wire_apply.uploads
         assert await _count(session_maker, ActivityLog, resource_id=job.id) == 1
 
-    async def test_verify_fail_lands_failed_without_raising(
+    async def test_verify_fail_lands_failed_without_raising(  # noqa: PLR0913 - fixture params
         self,
         session: AsyncSession,
         session_maker: SessionMaker,

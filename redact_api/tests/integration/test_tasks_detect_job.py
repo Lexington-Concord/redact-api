@@ -83,7 +83,7 @@ class TestDetectJob:
         assert await _span_count_for_document(session_maker, job.document_id) > 0
         assert await _count(session_maker, ActivityLog, resource_id=job.id) == 1
 
-    async def test_detection_failure_marks_failed_and_reraises(
+    async def test_detection_failure_marks_failed_and_reraises(  # noqa: PLR0913 - fixture params
         self,
         session: AsyncSession,
         session_maker: SessionMaker,
