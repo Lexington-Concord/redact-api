@@ -64,7 +64,8 @@ def assert_tier2_candidate(
     assert span.category == category
     assert span.source_tier == SourceTier.TIER_2
     # Half-open any-overlap predicate, identical to resolve_span_bboxes.
-    assert span.start < expected_end and expected_start < span.end
+    assert span.start < expected_end
+    assert expected_start < span.end
     assert span.confidence >= TIER2_MIN_CONFIDENCE
     assert page.text[span.start : span.end] == span.text
     assert span.bboxes

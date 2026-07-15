@@ -30,16 +30,15 @@ _TEXT = "Name John Smith Jr end"
 
 def _span(
     page: PageModel,
-    start: int,
-    end: int,
+    window: tuple[int, int],
     *,
     category: str,
     tier: SourceTier,
     confidence: float,
-    page_number: int | None = None,
 ) -> CandidateSpan:
+    start, end = window
     return CandidateSpan(
-        page_number=page.page_number if page_number is None else page_number,
+        page_number=page.page_number,
         start=start,
         end=end,
         bboxes=resolve_span_bboxes(page, start, end),
@@ -53,8 +52,8 @@ def _span(
 class TestNoOverlap:
     def test_both_pass_through_unchanged(self) -> None:
         page = make_page(_TEXT)
-        t1 = _span(page, 5, 9, category=CATEGORY_NAME, tier=SourceTier.TIER_1, confidence=CONFIDENCE_REGEX_ONLY)
-        t2 = _span(page, 19, 22, category=CATEGORY_NAME, tier=SourceTier.TIER_2, confidence=TIER2_MIN_CONFIDENCE)
+        t1 = _span(page, (5, 9), category=CATEGORY_NAME, tier=SourceTier.TIER_1, confidence=CONFIDENCE_REGEX_ONLY)
+        t2 = _span(page, (19, 22), category=CATEGORY_NAME, tier=SourceTier.TIER_2, confidence=TIER2_MIN_CONFIDENCE)
 
         result = dedupe_tier2_against_tier1(page, [t1], [t2])
 
@@ -66,8 +65,8 @@ class TestNoOverlap:
 class TestContainedOverlapIsNoOp:
     def test_survivor_keeps_tier1_range_and_metadata(self) -> None:
         page = make_page(_TEXT)
-        t1 = _span(page, 5, 18, category=CATEGORY_NAME, tier=SourceTier.TIER_1, confidence=CONFIDENCE_REGEX_ONLY)
-        t2 = _span(page, 10, 15, category=CATEGORY_NAME, tier=SourceTier.TIER_2, confidence=TIER2_MIN_CONFIDENCE)
+        t1 = _span(page, (5, 18), category=CATEGORY_NAME, tier=SourceTier.TIER_1, confidence=CONFIDENCE_REGEX_ONLY)
+        t2 = _span(page, (10, 15), category=CATEGORY_NAME, tier=SourceTier.TIER_2, confidence=TIER2_MIN_CONFIDENCE)
 
         result = dedupe_tier2_against_tier1(page, [t1], [t2])
 
@@ -83,9 +82,9 @@ class TestContainedOverlapIsNoOp:
 class TestDifferentCategory:
     def test_no_merge_both_kept(self) -> None:
         page = make_page(_TEXT)
-        t1 = _span(page, 5, 15, category=CATEGORY_NAME, tier=SourceTier.TIER_1, confidence=CONFIDENCE_REGEX_ONLY)
+        t1 = _span(page, (5, 15), category=CATEGORY_NAME, tier=SourceTier.TIER_1, confidence=CONFIDENCE_REGEX_ONLY)
         t2 = _span(
-            page, 5, 15, category=CATEGORY_ORGANIZATION, tier=SourceTier.TIER_2, confidence=TIER2_MIN_CONFIDENCE
+            page, (5, 15), category=CATEGORY_ORGANIZATION, tier=SourceTier.TIER_2, confidence=TIER2_MIN_CONFIDENCE
         )
 
         result = dedupe_tier2_against_tier1(page, [t1], [t2])
@@ -98,16 +97,10 @@ class TestDifferentCategory:
 class TestDifferentPage:
     def test_page_guard_blocks_merge(self) -> None:
         page = make_page(_TEXT)
-        t1 = _span(page, 5, 15, category=CATEGORY_NAME, tier=SourceTier.TIER_1, confidence=CONFIDENCE_REGEX_ONLY)
+        t1 = _span(page, (5, 15), category=CATEGORY_NAME, tier=SourceTier.TIER_1, confidence=CONFIDENCE_REGEX_ONLY)
         t2 = _span(
-            page,
-            5,
-            15,
-            category=CATEGORY_NAME,
-            tier=SourceTier.TIER_2,
-            confidence=TIER2_MIN_CONFIDENCE,
-            page_number=2,
-        )
+            page, (5, 15), category=CATEGORY_NAME, tier=SourceTier.TIER_2, confidence=TIER2_MIN_CONFIDENCE
+        ).model_copy(update={"page_number": 2})
 
         result = dedupe_tier2_against_tier1(page, [t1], [t2])
 
@@ -120,8 +113,8 @@ class TestBoundaryExtensionMerge:
     def test_ner_span_extends_one_word_past_regex_match(self) -> None:
         page = make_page(_TEXT)
         # Tier-1 regex matched "John Smith"; NER extends to "John Smith Jr".
-        t1 = _span(page, 5, 15, category=CATEGORY_NAME, tier=SourceTier.TIER_1, confidence=CONFIDENCE_REGEX_ONLY)
-        t2 = _span(page, 5, 18, category=CATEGORY_NAME, tier=SourceTier.TIER_2, confidence=TIER2_MIN_CONFIDENCE)
+        t1 = _span(page, (5, 15), category=CATEGORY_NAME, tier=SourceTier.TIER_1, confidence=CONFIDENCE_REGEX_ONLY)
+        t2 = _span(page, (5, 18), category=CATEGORY_NAME, tier=SourceTier.TIER_2, confidence=TIER2_MIN_CONFIDENCE)
 
         result = dedupe_tier2_against_tier1(page, [t1], [t2])
 
