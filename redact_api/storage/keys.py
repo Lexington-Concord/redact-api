@@ -32,3 +32,8 @@ def original_pdf_key(document_id: UUID) -> str:
 def redacted_pdf_key(job_id: UUID) -> str:
     """Object key for a job's redacted (post-apply) PDF."""
     return f"{JOBS_PREFIX}/{job_id}/redacted.pdf"
+
+
+def export_manifest_key(job_id: UUID) -> str:
+    """Object key for a job's export manifest JSON."""
+    return f"{JOBS_PREFIX}/{job_id}/manifest.json"

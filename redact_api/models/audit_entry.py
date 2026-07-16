@@ -21,12 +21,22 @@ from redact_api.models.base import TimestampedTable
 
 
 class AuditAction(StrEnum):
-    """The reviewer action an audit entry records. Distinct from DispositionAction."""
+    """The audited action an entry records. Distinct from DispositionAction.
+
+    Span-level reviewer verbs (APPROVED/REJECTED/EDITED/MANUAL_SPAN_ADDED) carry a span_id
+    and a text digest. Job-level lifecycle events (APPLY_STARTED/VERIFY_PASSED/VERIFY_FAILED/
+    EXPORTED) carry no span and no text -- their ``text_hash`` is NULL. All are backed by a
+    VARCHAR column (``native_enum=False``), so extending this enum requires no DDL.
+    """
 
     APPROVED = "approved"
     REJECTED = "rejected"
     EDITED = "edited"
     MANUAL_SPAN_ADDED = "manual_span_added"
+    APPLY_STARTED = "apply_started"
+    VERIFY_PASSED = "verify_passed"
+    VERIFY_FAILED = "verify_failed"
+    EXPORTED = "exported"
 
 
 class AuditEntryBase(SQLModel):
@@ -68,7 +78,11 @@ class AuditEntryBase(SQLModel):
         )
     )
     category: str = Field(description="PII category label (carries no raw text)")
-    text_hash: str = Field(description="SHA-256 hex digest of the normalized span text")
+    text_hash: str | None = Field(
+        default=None,
+        sa_column=sa.Column(sa.String(), nullable=True),
+        description="SHA-256 hex digest of the normalized span text; NULL for job-level lifecycle events",
+    )
     entry_hash: str = Field(description="SHA-256 hex digest chaining this entry to prev_hash")
     prev_hash: str = Field(description="entry_hash of the previous entry, or genesis for the first")
     sequence: int = Field(description="Monotonic per-job ordinal for deterministic chaining")

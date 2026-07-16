@@ -8,6 +8,7 @@ failure, and guard-first redelivery.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Awaitable, Callable
 from uuid import UUID
 
@@ -18,12 +19,20 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from taskiq import InMemoryBroker
 
 from redact_api.models.activity_log import ActivityLog
+from redact_api.models.audit_entry import AuditAction, AuditEntry
 from redact_api.models.disposition import Disposition, DispositionAction
 from redact_api.models.organization import Organization
 from redact_api.models.page import Page
 from redact_api.models.redaction_job import JobStatus, RedactionJob
 from redact_api.models.span import SourceTier, Span
-from redact_api.redaction.models import ApplyResult, ApprovedSpan, VerifyResult, VerifyVerdict
+from redact_api.redaction.models import (
+    ApplyResult,
+    ApprovedSpan,
+    CheckSummary,
+    CheckType,
+    VerifyResult,
+    VerifyVerdict,
+)
 from redact_api.storage import keys
 from redact_api.tasks import apply_job as apply_job_module
 from redact_api.tasks.apply_job import apply_job
@@ -60,6 +69,23 @@ def _passing_apply(_pdf_bytes: bytes, _spans: list[ApprovedSpan]) -> ApplyResult
 def _failing_apply(_pdf_bytes: bytes, _spans: list[ApprovedSpan]) -> ApplyResult:
     return ApplyResult(
         pdf_bytes=b"redacted", verify_result=VerifyResult(verdict=VerifyVerdict.FAIL, checks=[], findings=[])
+    )
+
+
+_SINGLE_CHECK = [CheckSummary(check_type=CheckType.TEXT_LAYER, passed=True, pages_checked=2)]
+
+
+def _passing_apply_with_checks(_pdf_bytes: bytes, _spans: list[ApprovedSpan]) -> ApplyResult:
+    return ApplyResult(
+        pdf_bytes=b"redacted",
+        verify_result=VerifyResult(verdict=VerifyVerdict.PASS, checks=_SINGLE_CHECK, findings=[]),
+    )
+
+
+def _failing_apply_with_checks(_pdf_bytes: bytes, _spans: list[ApprovedSpan]) -> ApplyResult:
+    return ApplyResult(
+        pdf_bytes=b"redacted",
+        verify_result=VerifyResult(verdict=VerifyVerdict.FAIL, checks=_SINGLE_CHECK, findings=[]),
     )
 
 
@@ -103,7 +129,7 @@ class TestApplyJob:
         await session.commit()
         wire_apply.uploads[keys.original_pdf_key(job.document_id)] = build_multi_page_pdf(page_count=1)
 
-        await apply_job(job_id=str(job.id))
+        await apply_job(job_id=str(job.id), reviewer_id=str(DEFAULT_REVIEWER_ID))
 
         refreshed = await _fetch_job(session_maker, job.id)
         assert refreshed.status == JobStatus.VERIFIED
@@ -126,7 +152,7 @@ class TestApplyJob:
         await session.commit()
         wire_apply.uploads[keys.original_pdf_key(job.document_id)] = build_multi_page_pdf(page_count=1)
 
-        await apply_job(job_id=str(job.id))
+        await apply_job(job_id=str(job.id), reviewer_id=str(DEFAULT_REVIEWER_ID))
 
         refreshed = await _fetch_job(session_maker, job.id)
         assert refreshed.status == JobStatus.FAILED
@@ -149,7 +175,29 @@ class TestApplyJob:
         wire_apply.uploads[keys.original_pdf_key(job.document_id)] = build_multi_page_pdf(page_count=1)
 
         with pytest.raises(ValidationError):
-            await apply_job(job_id=str(job.id))
+            await apply_job(job_id=str(job.id), reviewer_id=str(DEFAULT_REVIEWER_ID))
+
+        refreshed = await _fetch_job(session_maker, job.id)
+        assert refreshed.status == JobStatus.FAILED
+        assert await _count(session_maker, ActivityLog, resource_id=job.id) == 1
+
+    async def test_malformed_reviewer_id_marks_failed_and_reraises(
+        self,
+        session: AsyncSession,
+        session_maker: SessionMaker,
+        make_organization: MakeOrg,
+        make_job: MakeJob,
+        wire_apply: FakeStorageClient,
+    ) -> None:
+        """A reviewer_id that isn't a parseable UUID must route through fail_job, not crash
+        unhandled before the job ever leaves APPLYING (hardening added in the Stage 3 fix loop)."""
+        org = await make_organization()
+        job = await make_job(org, status=JobStatus.APPLYING)
+        await session.commit()
+        wire_apply.uploads[keys.original_pdf_key(job.document_id)] = build_multi_page_pdf(page_count=1)
+
+        with pytest.raises(ValueError, match="badly formed hexadecimal UUID string"):
+            await apply_job(job_id=str(job.id), reviewer_id="not-a-uuid")
 
         refreshed = await _fetch_job(session_maker, job.id)
         assert refreshed.status == JobStatus.FAILED
@@ -167,12 +215,96 @@ class TestApplyJob:
         job = await make_job(org, status=JobStatus.VERIFIED)
         await session.commit()
 
-        await apply_job(job_id=str(job.id))
+        await apply_job(job_id=str(job.id), reviewer_id=str(DEFAULT_REVIEWER_ID))
 
         refreshed = await _fetch_job(session_maker, job.id)
         assert refreshed.status == JobStatus.VERIFIED
         assert await _count(session_maker, ActivityLog, resource_id=job.id) == 0
         assert keys.redacted_pdf_key(job.id) not in wire_apply.uploads
+
+    async def _audit_entries(self, session_maker: SessionMaker, job_id: UUID) -> list[AuditEntry]:
+        async with session_maker() as check:
+            return list(
+                (
+                    await check.execute(
+                        select(AuditEntry).where(AuditEntry.job_id == job_id).order_by(AuditEntry.sequence)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+
+    async def test_apply_started_precedes_verify_outcome(  # noqa: PLR0913 - fixture params
+        self,
+        session: AsyncSession,
+        session_maker: SessionMaker,
+        make_organization: MakeOrg,
+        make_job: MakeJob,
+        wire_apply: FakeStorageClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(apply_job_module, "apply", _passing_apply_with_checks)
+        org = await make_organization()
+        job = await make_job(org, status=JobStatus.APPLYING)
+        await session.commit()
+        wire_apply.uploads[keys.original_pdf_key(job.document_id)] = build_multi_page_pdf(page_count=1)
+
+        await apply_job(job_id=str(job.id), reviewer_id=str(DEFAULT_REVIEWER_ID))
+
+        entries = await self._audit_entries(session_maker, job.id)
+        actions = [entry.action for entry in entries]
+        assert actions == [AuditAction.APPLY_STARTED, AuditAction.VERIFY_PASSED]
+        # Job-level lifecycle rows carry no span and no text digest.
+        assert all(entry.span_id is None for entry in entries)
+        assert all(entry.text_hash is None for entry in entries)
+
+    async def test_verify_passed_category_is_parseable_json_blob(  # noqa: PLR0913 - fixture params
+        self,
+        session: AsyncSession,
+        session_maker: SessionMaker,
+        make_organization: MakeOrg,
+        make_job: MakeJob,
+        wire_apply: FakeStorageClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(apply_job_module, "apply", _passing_apply_with_checks)
+        org = await make_organization()
+        job = await make_job(org, status=JobStatus.APPLYING)
+        await session.commit()
+        wire_apply.uploads[keys.original_pdf_key(job.document_id)] = build_multi_page_pdf(page_count=1)
+
+        await apply_job(job_id=str(job.id), reviewer_id=str(DEFAULT_REVIEWER_ID))
+
+        entries = await self._audit_entries(session_maker, job.id)
+        verify_entry = next(entry for entry in entries if entry.action == AuditAction.VERIFY_PASSED)
+        summary = json.loads(verify_entry.category)
+        assert summary["verdict"] == "pass"
+        assert summary["checks"] == [{"check_type": "text_layer", "passed": True, "pages_checked": 2}]
+        assert verify_entry.reviewer_id == DEFAULT_REVIEWER_ID
+
+    async def test_verify_failed_category_records_fail_verdict(  # noqa: PLR0913 - fixture params
+        self,
+        session: AsyncSession,
+        session_maker: SessionMaker,
+        make_organization: MakeOrg,
+        make_job: MakeJob,
+        wire_apply: FakeStorageClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(apply_job_module, "apply", _failing_apply_with_checks)
+        org = await make_organization()
+        job = await make_job(org, status=JobStatus.APPLYING)
+        await session.commit()
+        wire_apply.uploads[keys.original_pdf_key(job.document_id)] = build_multi_page_pdf(page_count=1)
+
+        await apply_job(job_id=str(job.id), reviewer_id=str(DEFAULT_REVIEWER_ID))
+
+        entries = await self._audit_entries(session_maker, job.id)
+        actions = [entry.action for entry in entries]
+        assert actions == [AuditAction.APPLY_STARTED, AuditAction.VERIFY_FAILED]
+        verify_entry = entries[-1]
+        summary = json.loads(verify_entry.category)
+        assert summary["verdict"] == "fail"
 
     async def test_via_broker_kiq_applies_through_middleware_pipeline(  # noqa: PLR0913 - fixture params
         self,
@@ -196,7 +328,7 @@ class TestApplyJob:
         await session.commit()
         wire_apply.uploads[keys.original_pdf_key(job.document_id)] = build_multi_page_pdf(page_count=1)
 
-        task = await apply_job.kiq(job_id=str(job.id))
+        task = await apply_job.kiq(job_id=str(job.id), reviewer_id=str(DEFAULT_REVIEWER_ID))
         result = await task.wait_result(check_interval=0.01)
 
         assert not result.is_err

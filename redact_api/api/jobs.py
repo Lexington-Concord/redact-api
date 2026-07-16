@@ -9,6 +9,8 @@ failures to 422, and a verify-gate FAIL at apply is a normal 422 (not an excepti
 
 from __future__ import annotations
 
+import io
+import zipfile
 from uuid import UUID
 
 from fastapi import APIRouter, File, HTTPException, Response, UploadFile, status
@@ -26,10 +28,15 @@ from redact_api.ingest.exceptions import (
     UnsupportedPageError,
 )
 from redact_api.ingest.pdf import validate_pdf_structure
+from redact_api.models.audit_entry import AuditAction
 from redact_api.models.document import Document
 from redact_api.models.page import Page
 from redact_api.models.redaction_job import JobStatus, RedactionJob, RedactionJobRead
 from redact_api.models.span import Span, SpanRead
+from redact_api.services.export_manifest_service import (
+    ExportAssemblyError,
+    assemble_export_manifest,
+)
 from redact_api.services.jobs_service import (
     DispositionBatchRequest,
     DispositionBatchResult,
@@ -37,9 +44,13 @@ from redact_api.services.jobs_service import (
     apply_disposition_batch,
 )
 from redact_api.services.redaction_job_service import (
+    JOB_LIFECYCLE_CATEGORY,
+    AuditEntryInput,
     InvalidStateTransitionError,
     UndispositionedSpansError,
+    append_audit_entry,
     transition_job_status,
+    verify_audit_chain,
 )
 from redact_api.storage import keys
 from redact_api.storage.dependency import StorageClientDep
@@ -49,6 +60,10 @@ from redact_api.tasks.ingest_job import ingest_job as ingest_job_task
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 
 _PDF_CONTENT_TYPE = "application/pdf"
+_ZIP_CONTENT_TYPE = "application/zip"
+_MANIFEST_CONTENT_TYPE = "application/json"
+_EXPORT_PDF_MEMBER = "redacted.pdf"
+_EXPORT_MANIFEST_MEMBER = "manifest.json"
 
 
 async def _get_job_or_404(session: SessionDep, tenant: TenantDep, job_id: UUID) -> RedactionJob:
@@ -214,8 +229,9 @@ async def apply_job(
     await session.commit()
     await session.refresh(job)
 
-    # Enqueue after commit so the worker observes the persisted APPLYING job.
-    await apply_job_task.kiq(job_id=str(job.id))
+    # Enqueue after commit so the worker observes the persisted APPLYING job. reviewer_id is
+    # threaded so the task-layer lifecycle audit entries attribute to the requesting reviewer.
+    await apply_job_task.kiq(job_id=str(job.id), reviewer_id=str(tenant.user_id))
     return RedactionJobRead.model_validate(job)
 
 
@@ -228,11 +244,16 @@ async def export_job(
     storage: StorageClientDep,
     role_check: RequireAdmin,
 ) -> Response:
-    """Stream the verified redacted PDF and move VERIFIED -> EXPORTED (idempotent re-read).
+    """Return a zip of the verified redacted PDF + audit manifest, moving VERIFIED -> EXPORTED.
 
-    ADMIN-only. A job earlier than VERIFIED yields 409; a VERIFIED or already-EXPORTED job
-    returns the persisted redacted bytes (never recomputed). The VERIFIED -> EXPORTED
-    transition happens once; re-reads of an EXPORTED job are served without re-transitioning.
+    ADMIN-only. A job earlier than VERIFIED yields 409. The audit hash chain is verified first;
+    a broken chain yields 409 before any bytes are served. The response is an
+    ``application/zip`` bundle of ``redacted.pdf`` (the persisted redacted bytes, never
+    recomputed) plus ``manifest.json`` (the digest-only ``ExportManifest``). The manifest is
+    assembled fresh from the live chain on every GET -- including re-reads of an already-EXPORTED
+    job -- so it always reflects current chain state. The VERIFIED -> EXPORTED transition and its
+    EXPORTED audit entry happen exactly once; re-reads of an EXPORTED job are served without
+    re-transitioning or re-appending.
     """
     _ = role_check
     job = await _get_job_or_404(session, tenant, job_id)
@@ -244,10 +265,68 @@ async def export_job(
         missing_artifact_msg = "Job has no redacted artifact to export"
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=missing_artifact_msg)
 
+    # Gate on chain integrity before touching any PDF bytes: a tampered audit trail must not
+    # yield an export bundle. The verified ChainVerifyResult is passed into
+    # assemble_export_manifest below so it isn't recomputed a second time.
+    chain = await verify_audit_chain(session, job.id)
+    if not chain.verified:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "error": "audit_chain_broken",
+                "message": "Audit chain failed verification; export blocked",
+                "entry_count": chain.entry_count,
+                "first_broken_entry_id": str(chain.first_broken_entry_id)
+                if chain.first_broken_entry_id is not None
+                else None,
+            },
+        )
+
+    # Downloaded once here (after the chain gate) and reused for both hashing (inside
+    # assemble_export_manifest) and the zip bundle below, instead of fetching the same object twice.
     pdf_bytes = await storage.download_bytes(job.redacted_pdf_key)
 
+    try:
+        manifest = await assemble_export_manifest(session, storage, job, chain=chain, redacted_bytes=pdf_bytes)
+    except ExportAssemblyError as error:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"error": "export_assembly_failed", "message": str(error)},
+        ) from error
+
+    manifest_bytes = manifest.model_dump_json().encode("utf-8")
+    zip_bytes = _build_export_zip(pdf_bytes, manifest_bytes)
+    # Persist the canonical manifest alongside the redacted artifact (idempotent overwrite).
+    await storage.upload_bytes(keys.export_manifest_key(job.id), manifest_bytes, content_type=_MANIFEST_CONTENT_TYPE)
+
     if job.status is JobStatus.VERIFIED:
+        # EXPORTED audit entry + transition fire exactly once, only on the first export; the
+        # manifest above was assembled before this row exists, so a first-export manifest never
+        # lists its own EXPORTED event.
+        await append_audit_entry(
+            session,
+            job.id,
+            AuditEntryInput(
+                action=AuditAction.EXPORTED,
+                category=JOB_LIFECYCLE_CATEGORY,
+                text=None,
+                reviewer_id=tenant.user_id,
+            ),
+        )
         await transition_job_status(session, job, JobStatus.EXPORTED)
         await session.commit()
 
-    return Response(content=pdf_bytes, media_type=_PDF_CONTENT_TYPE)
+    return Response(
+        content=zip_bytes,
+        media_type=_ZIP_CONTENT_TYPE,
+        headers={"Content-Disposition": f'attachment; filename="job-{job_id}-export.zip"'},
+    )
+
+
+def _build_export_zip(pdf_bytes: bytes, manifest_bytes: bytes) -> bytes:
+    """Bundle the redacted PDF and manifest JSON into an in-memory zip archive."""
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr(_EXPORT_PDF_MEMBER, pdf_bytes)
+        archive.writestr(_EXPORT_MANIFEST_MEMBER, manifest_bytes)
+    return buffer.getvalue()

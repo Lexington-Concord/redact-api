@@ -90,3 +90,22 @@ class TestRedactedPdfKey:
     def test_distinct_from_original_pdf_key(self) -> None:
         # Same UUID used as both a document id and a job id must not collide.
         assert keys.redacted_pdf_key(JOB_ID) != keys.original_pdf_key(JOB_ID)
+
+
+class TestExportManifestKey:
+    def test_returns_stable_key(self) -> None:
+        assert keys.export_manifest_key(JOB_ID) == keys.export_manifest_key(JOB_ID)
+
+    def test_includes_job_id(self) -> None:
+        assert str(JOB_ID) in keys.export_manifest_key(JOB_ID)
+
+    def test_ends_with_json_extension(self) -> None:
+        assert keys.export_manifest_key(JOB_ID).endswith(".json")
+
+    def test_different_job_ids_produce_different_keys(self) -> None:
+        other_id = UUID("11111111-2222-3333-4444-555555555555")
+        assert keys.export_manifest_key(JOB_ID) != keys.export_manifest_key(other_id)
+
+    def test_distinct_from_redacted_pdf_key(self) -> None:
+        # Same job id must yield distinct keys for the redacted PDF and the manifest.
+        assert keys.export_manifest_key(JOB_ID) != keys.redacted_pdf_key(JOB_ID)
